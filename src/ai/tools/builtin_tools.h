@@ -55,4 +55,25 @@ void registerAnnotationTools(ToolRegistry& reg);
 //   list_functions / get_module_imports / get_module_exports
 void registerProgramMapTools(ToolRegistry& reg);
 
+// 在 reg 中注册高级断点工具（S7-A + S7-B）：
+//   set_hw_breakpoint / remove_hw_breakpoint (Write+confirm)
+//   set_conditional_bp (Write+confirm，基于 BpRefVa + BpSetFieldText)
+void registerAdvancedBpTools(ToolRegistry& reg);
+
+// 在 reg 中注册汇编 / 模式 / 标志位工具（S7-C + S7-D + S7-F）：
+//   assemble_at (Write+confirm，AssembleMemEx + fill_nop)
+//   pattern_replace (Write+confirm，SearchAndReplaceMem，size<=16MB)
+//   set_flag (Write+confirm，ZF/OF/CF/PF/SF/TF/AF/DF/IF)
+void registerAssemblerPatternTools(ToolRegistry& reg);
+
+// 在 reg 中注册 CFG 工具（S7-E）：
+//   get_cfg (Read，DbgAnalyzeFunction + BridgeCFGraph → Mermaid graph TD)
+void registerCfgTools(ToolRegistry& reg);
+
+// 在 reg 中注册补丁审计 / 模板 / GUI 焦点工具（S7-G + S7-H + S7-I）：
+//   list_patches (Read) / restore_patch (Write+confirm)
+//   format_with_dbg (Read，StringFormatInline)
+//   gui_focus_disasm / gui_focus_dump (DbgControl，无副作用)
+void registerPatchMiscTools(ToolRegistry& reg);
+
 }  // namespace x64ai

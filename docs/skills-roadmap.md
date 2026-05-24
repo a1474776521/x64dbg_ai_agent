@@ -4,13 +4,13 @@
 > **每次完成一个 S 段后，更新本表的 ✅/❌ 列 + Done 行**。
 > 横向对照：[features.md](features.md) 是最终能力快照；本文件是规划+进度。
 
-最后更新：2026-05-24（S6 完成；S7/S8 未启动）
+最后更新：2026-05-24（S7 完成；S8 未启动）
 
 ---
 
 ## 1. 工具（"技能"）矩阵
 
-### 1.1 已实现（37 个，✅ = 真机可用）
+### 1.1 已实现（49 个，✅ = 真机可用）
 
 | # | 类别 | 工具 | 状态 | 能力一句话 | SDK API | 阶段 |
 |---|---|---|---|---|---|---|
@@ -57,27 +57,29 @@
 | 41 | 程序地图 | `get_module_imports` | ✅ | 指定模块 IAT 列表 | `Script::Module::GetImports` | S6 |
 | 42 | 程序地图 | `get_module_exports` | ✅ | 指定模块 EAT 列表 | `Script::Module::GetExports` | S6 |
 
-**小计**：15(原读) + 6(S6 新读：3 label + 3 comment) + 5(S6 新读：memory_map/page_protect/list_functions/imports/exports) + 1(原控制) + 2(S6 新控制：run_continue/pause_debug) + 11(原写) + 2(S6 新写：step_out/set_page_protect) + 1(S6 沉淀写 set_label) + 1(S6 沉淀写 set_comment) = **37**
-（更直白：26 读 + 3 控制 + 8 写 = 37）
+**小计**：15(原读) + 6(S6 新读：3 label + 3 comment) + 5(S6 新读：memory_map/page_protect/list_functions/imports/exports) + 1(原控制) + 2(S6 新控制：run_continue/pause_debug) + 11(原写) + 2(S6 新写：step_out/set_page_protect) + 1(S6 沉淀写 set_label) + 1(S6 沉淀写 set_comment) + 7(S7 写：set_hw_breakpoint/remove_hw_breakpoint/set_conditional_bp/assemble_at/pattern_replace/set_flag/restore_patch) + 1(S7 写 assemble_at 已计入 7 中) + 3(S7 读：get_cfg/list_patches/format_with_dbg) + 2(S7 控制：gui_focus_disasm/gui_focus_dump) = **49**
+（更直白：29 读 + 5 控制 + 15 写 = 49）
 
 ### 1.2 计划中（按 ROI 排序）
 
 #### P0（S6 已完成 ✅ — 见 1.1 表第 28–42 行）
 
-#### P1 高 ROI（S7 目标，10 个）
+#### P1（S7 已完成 ✅ — 12 个工具实装；2026-05-24，tag `s7-done`）
 
 | # | 类别 | 工具 | 状态 | 能力一句话 | SDK API | 阶段 |
 |---|---|---|---|---|---|---|
-| 43 | 高级断点 | `set_hw_breakpoint` / `remove_hw_breakpoint` | ❌ | 硬件断点 R/W/X 监控变量 | `Script::Debug::SetHardwareBreakpoint` | S7 |
-| 44 | 高级断点 | `set_conditional_bp` | ❌ | 条件断点 + log 断点 + 命令断点三合一 | `BpSetFieldText(bpf_*)` | S7 |
-| 45 | 汇编 | `assemble_at` | ❌ | 写汇编（"jne→jmp"），比手算字节准 | `Script::Assembler::AssembleMem` | S7 |
-| 46 | 模式 | `pattern_replace` | ❌ | 一行批量替换 pattern | `Script::Pattern::SearchAndReplaceMem` | S7 |
-| 47 | CFG | `get_cfg` | ❌ | 函数基本块+边，可序列化 mermaid | `DbgAnalyzeFunction` → `BridgeCFGraph` | S7 |
-| 48 | 标志 | `set_flag` | ❌ | 强制改 ZF 让 je 跳走 | `Script::Flag::Set` | S7 |
-| 49 | 补丁 | `list_patches` | ❌ | 列已打补丁 | `DbgFunctions()->PatchEnum` | S7 |
-| 50 | 补丁 | `restore_patch` | ❌ | 回滚单个补丁 | `DbgFunctions()->PatchRestore` | S7 |
-| 51 | 格式化 | `format_with_dbg` | ❌ | x64dbg 原生模板 `{x:[rax+8]}` | `DbgFunctions()->StringFormatInline` | S7 |
-| 52 | GUI | `gui_focus_disasm` / `gui_focus_dump` | ❌ | 引导用户视线"看这里" | `GuiDisasmAt` / `GuiDumpAt` | S7 |
+| 43 | 高级断点 | `set_hw_breakpoint` | ✅ | 硬件断点 execute/write/access；4 槽上限 | `Script::Debug::SetHardwareBreakpoint(addr,HardwareType)` | S7 |
+| 44 | 高级断点 | `remove_hw_breakpoint` | ✅ | 删除指定 VA 的 HWBP | `Script::Debug::DeleteHardwareBreakpoint` | S7 |
+| 45 | 高级断点 | `set_conditional_bp` | ✅ | 在既有软断点上配 break/log/command + 各自 condition + fastResume/silent；空串清字段 | `BpRefVa` + `BpSetFieldText/Number(bpf_*)` | S7 |
+| 46 | 汇编 | `assemble_at` | ✅ | 在 VA 汇编一条指令；默认 fill_nop=true；返回汇编后字节数 | `Script::Assembler::AssembleMemEx` | S7 |
+| 47 | 模式 | `pattern_replace` | ✅ | [start,start+size) 内一行批量替换；size≤16MB；`??` 通配 | `Script::Pattern::SearchAndReplaceMem` | S7 |
+| 48 | CFG | `get_cfg` | ✅ | DbgAnalyzeFunction → BridgeCFGraph → Mermaid graph TD；256 节点截断 | `DbgAnalyzeFunction` + `bridgegraph.h` | S7 |
+| 49 | 标志 | `set_flag` | ✅ | 设置 ZF/OF/CF/PF/SF/TF/AF/DF/IF | `Script::Flag::Set` | S7 |
+| 50 | 补丁 | `list_patches` | ✅ | 列已打补丁（PatchEnum 两阶段），可按模块名子串过滤 | `DbgFunctions()->PatchEnum` | S7 |
+| 51 | 补丁 | `restore_patch` | ✅ | 回滚指定 VA 的单字节补丁 | `DbgFunctions()->PatchRestore` | S7 |
+| 52 | 格式化 | `format_with_dbg` | ✅ | x64dbg 原生模板 `{x:[rax+8]}`；4KB 输出 | `DbgFunctions()->StringFormatInline` | S7 |
+| 53 | GUI | `gui_focus_disasm` | ✅ | 滚动反汇编视图到 VA（DbgControl，无副作用） | `GuiDisasmAt` | S7 |
+| 54 | GUI | `gui_focus_dump` | ✅ | 滚动 dump 视图到 VA；可选 index∈[1,5] 选 Dump1..5 | `GuiDumpAt` / `GuiDumpAtN` | S7 |
 
 #### P2 场景化（S8+ 按需）
 

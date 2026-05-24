@@ -779,3 +779,78 @@ x64dbg SDK 的 `_plugin_registercallback` 对同 `(plugin, type)` 后注册者�
 - 工具总数：26 读 + 3 控制 + 8 写 = **37 工具**。
 - 预设总数：7（含 freeform / analyze-function / who-calls-here / string-api-context / explain-here / **annotate-function** / **map-program**）。
 - Git tag：`s6-done`。
+
+
+## S7：高级断点 + 汇编 + CFG + 补丁 + GUI 焦点（2026-05-24）
+
+> 目标：把 agent 从"分析者"升级为"操作者"。补齐硬件断点 / 条件断点 / 汇编写入 / 模式批量替换 / CFG 可视化 / 标志位翻转 / 补丁审计与回滚 / x64dbg 原生模板渲染 / GUI 焦点引导，共 12 个新工具，全面覆盖破解 / 反反调试 / 数据流追踪三类高价值场景。
+
+### 工具分组（新增 12 个；总 37 → 49；29 读 + 5 控制 + 15 写）
+
+#### S7-A 高级断点（`ai/tools/advanced_bp_tools.cpp` 上半）
+- `set_hw_breakpoint(address, type=execute|write|access)` — Write+confirm。`Script::Debug::SetHardwareBreakpoint(addr, HardwareType)`；**注意 SDK 不暴露 size 参数**（DR7 LEN 由 type 决定，全部按 1 字节），如需指定 size 必须手写 `bphws` 命令。DR0–DR3 共 4 槽，超限 SDK 直接返 false，工具如实报错"possible cause: 4 HW BP slots exhausted"让 LLM 自我修正。
+- `remove_hw_breakpoint(address)` — Write+confirm。`Script::Debug::DeleteHardwareBreakpoint`；不存在不报错（read-after-write 语义），返回 `removed=false` 让 LLM 知道实际状态。
+
+#### S7-B 条件断点（`ai/tools/advanced_bp_tools.cpp` 下半）
+- `set_conditional_bp(address, condition?, logText?, logCondition?, command?, commandCondition?, fastResume?, silent?, name?)` — Write+confirm。**这是 S7 唯一一个"修改已有断点字段"的工具**，调用前用 `BpRefVa(&ref, bp_normal, va)` 把 VA 解成 `BP_REF`（_dbgfunctions.h:169-191），再用 `BpSetFieldText/Number(&ref, bpf_*, value)` 改字段。空串清字段。**任意字段中途失败立即返**（与 question 确认的"不回滚"策略一致），返回 `applied` 字段告诉 LLM 哪些已生效以便修复。前置条件：必须先 `set_breakpoint` 创建软断点，否则 `BpRefVa` 返 false。
+
+#### S7-C 汇编（`ai/tools/assembler_pattern_tools.cpp` 上半）
+- `assemble_at(address, instruction, fill_nop=true)` — Write+confirm。`Script::Assembler::AssembleMemEx(addr, asm, &size, errbuf, fillnop)`；**默认 fill_nop=true**（与 GUI 行为一致；用户确认的选项），新指令短于原指令时自动 NOP 填充。错误缓冲 `MAX_ERROR_SIZE=512`（bridgemain.h:196），失败时把 capstone 报错原文带回，避免 LLM 瞎猜（典型："invalid instruction" / "invalid register"）。
+
+#### S7-D 模式替换（`ai/tools/assembler_pattern_tools.cpp` 中段）
+- `pattern_replace(start, size, search_pattern, replace_pattern)` — Write+confirm。`Script::Pattern::SearchAndReplaceMem(start, size, search, replace)`，**`??` 通配** SDK 已内置，工具层不做掩码计算。size≤16MB（与 set_page_protect 同安全线，防止 LLM 写出 `size=进程总虚拟空间` 类悲剧调用）。
+
+#### S7-E CFG（`ai/tools/cfg_tool.cpp`）
+- `get_cfg(entry)` — Read。最复杂的一个工具。`DbgAnalyzeFunction(entry, &BridgeCFGraphList)`（bridgemain.h:1238）→ 用 `BridgeCFGraph(list, /*freedata=*/true)` C++ wrapper（bridgegraph.h）RAII 接管节点数组（避免手写 `BridgeFree(data)` 漏掉），自动转 `std::unordered_map<duint, BridgeCFNode>` + `parents` 反向边。输出按用户确认的方案：**单一 Mermaid `graph TD`**：
+  - 节点：`N_<hex>["<start>..<end>\n<icount> insn[ RET][ ICALL][ SPLIT]"]`
+  - 边：无条件 `-->`；条件 `-->|T|` (brtrue) / `-->|F|` (brfalse)
+  - 入口节点 `classDef entry fill:#fcc,stroke:#900` 高亮
+  - 节点数 > 256 时截断（mermaid.js 前端默认 maxEdges=500，留余量）
+  - 返回 `{entry, nodes, truncated, mermaid}`
+
+#### S7-F 标志位（`ai/tools/assembler_pattern_tools.cpp` 下半）
+- `set_flag(name, value)` — Write+confirm。name → `Script::Flag::FlagEnum` 9 选 1（ZF/OF/CF/PF/SF/TF/AF/DF/IF）。这是"快速试验某分支走法"的低成本写工具：先 set_flag 跑一遍看路径，再决定要不要 assemble_at 做持久补丁。
+
+#### S7-G 补丁审计（`ai/tools/patch_misc_tools.cpp` 上半）
+- `list_patches(module?)` — Read。`DbgFunctions()->PatchEnum` 两阶段查询：第一次 `PatchEnum(nullptr, &cbsize)` 拿大小，第二次填 `vector<DBGPATCHINFO>`。模块名子串大小写不敏感过滤；硬上限 4096 条；**每条 = 单字节 diff**（N 字节补丁出现 N 条记录），让 LLM 知道总规模。
+- `restore_patch(address)` — Write+confirm。`DbgFunctions()->PatchRestore`。无补丁时 SDK 返 false，工具如实报"no patch at <VA>?"。
+
+#### S7-H 模板（`ai/tools/patch_misc_tools.cpp` 中段）
+- `format_with_dbg(template)` — Read。`DbgFunctions()->StringFormatInline(fmt, size, out)`（_dbgfunctions.h:239）。支持 x64dbg 原生表达式 `{rax}` / `{x:[rsp+8]}` / `{s:[rcx]}`。预分配 4 KB `vector<char>` 缓冲；失败（模板不合法）报错。这是 trace-input 预设的关键工具——在每次断点命中时按模板渲染 `[rcx] = "{s:[rcx]}"` 一行字符串记忆点。
+
+#### S7-I GUI 焦点（`ai/tools/patch_misc_tools.cpp` 下半）
+- `gui_focus_disasm(address)` — **DbgControl**（不是 Write，无 confirm）。`GuiDisasmAt(addr, cip)`（bridgemain.h:1479），第二个参数 cip 是高亮 IP（我们填 addr）。
+- `gui_focus_dump(address, index=1)` — DbgControl。`index=1` 走 `GuiDumpAt(va)`，`index∈[2,5]` 走 `GuiDumpAtN(va, index-1)`（SDK 用 0-based）。
+
+### 预设（新增 5 个；总 7 → 12）
+
+| ID | 名 | 核心工具 | 用途 |
+|---|---|---|---|
+| `crack-license` | 破解许可校验 | get_cfg / set_flag / assemble_at / pattern_replace / list_patches | 定位 strcmp/wcscmp 调用 → 找 gate 跳转 → set_flag 试探 → assemble_at 持久化 |
+| `anti-anti-debug` | 反反调试 | locate_api_callers / set_conditional_bp / set_hw_breakpoint / assemble_at | 扫 IsDebuggerPresent/NtQueryInformationProcess/CheckRemoteDebuggerPresent 等 → 用条件断点 force return value，或就地 patch |
+| `cfg-explorer` | 控制流图探索 | get_cfg / get_disasm / get_function_range | 纯 Read；强制 systemPrompt 把 mermaid 块放进 ```mermaid 围栏（UI 可渲染） |
+| `patch-and-verify` | 补丁与验证 | list_patches / restore_patch / assemble_at / read_memory | 审查补丁、回滚、为新补丁建立"先备份再修改再验证"流程 |
+| `trace-input` | 追踪输入数据 | set_hw_breakpoint(type=write) / format_with_dbg / wait_for_event | 用 4 槽硬件写断点跟踪缓冲区被谁写；systemPrompt 强制"用完释放槽位" |
+
+`analyze-function` 同步扩白名单到全 49 工具（保持"全能预设"定位）。
+
+### 设计取舍
+- **失败即返、不回滚**（set_conditional_bp）：用户明确选择；理由是 BP_REF 无事务支持，回滚需要先读旧值再恢复（代码翻倍）；`applied` 字段给 LLM 足够信息自我修复。
+- **默认 fill_nop=true**（assemble_at）：与 GUI 一致；用户可显式 `fill_nop=false` 关闭。
+- **get_cfg 只输出 mermaid**（不返结构化 JSON）：用户确认；理由是 Mermaid 节点定义本身就把 start/end/icount/terminal/icall 都编进 label，AI 完全能从字符串提取；token 翻倍不值得。
+- **gui_focus_* 归类 DbgControl 不归 Write**：无副作用、不改任何调试状态；和 wait_for_event 同级，免确认。
+- **set_hw_breakpoint 不暴露 size 参数**：SDK 不允许；如果用户想 DR LEN=4 监 DWORD，让 LLM 走 run_dbg_command("bphws 0x.., w, 4")。
+- **list_patches 单字节 diff 而非聚合**：保真 SDK 原始数据；4096 上限够 99% 场景（除非有人 patch 整个 .text 段）。
+
+### S7-J 集成
+- 4 个新 `.cpp`：`advanced_bp_tools.cpp` (3) / `assembler_pattern_tools.cpp` (3) / `cfg_tool.cpp` (1) / `patch_misc_tools.cpp` (5)，共 12 工具。
+- `builtin_tools.h` 加 4 个 register 声明（`registerAdvancedBpTools` / `registerAssemblerPatternTools` / `registerCfgTools` / `registerPatchMiscTools`）；`tool_registry.cpp::registerBuiltinTools` 末尾加 4 个调用。
+- `src/CMakeLists.txt` PLUGIN_SOURCES 追加 4 个 .cpp。
+- `kPresetSchemaVersion` 10 → 11；`agent_preset.cpp` 新增 5 预设；`analyze-function` 白名单扩 12。
+
+### S7-K 编译验证
+- 双架构 Release 编译通过，**零警告零错误**（实测：x64 + x86 各 `warning C` 计数 = 0）。dp64 / dp32 已就位。
+- 工具总数：29 读 + 5 控制 + 15 写 = **49 工具**。
+- 预设总数：12（freeform / analyze-function / who-calls-here / string-api-context / explain-here / annotate-function / map-program / **crack-license** / **anti-anti-debug** / **cfg-explorer** / **patch-and-verify** / **trace-input**）。
+- Git tag：`s7-done`。
+

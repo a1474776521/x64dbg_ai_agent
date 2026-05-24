@@ -47,6 +47,10 @@ void ToolRegistry::registerBuiltinTools()
     registerDebugNavigationTools(*this);
     registerAnnotationTools(*this);
     registerProgramMapTools(*this);
+    registerAdvancedBpTools(*this);
+    registerAssemblerPatternTools(*this);
+    registerCfgTools(*this);
+    registerPatchMiscTools(*this);
     XAI_LOG_INFO("ToolRegistry::registerBuiltinTools(): total {} tools", tools_.size());
 }
 

@@ -170,7 +170,16 @@ std::vector<AgentPreset> defaultPresets()
             "set_comment","get_comment","list_comments",
             // S6-D/E：程序地图
             "get_memory_map","get_page_protect","set_page_protect",
-            "list_functions","get_module_imports","get_module_exports"
+            "list_functions","get_module_imports","get_module_exports",
+            // S7-A/B：高级断点
+            "set_hw_breakpoint","remove_hw_breakpoint","set_conditional_bp",
+            // S7-C/D/F：汇编/模式/标志位
+            "assemble_at","pattern_replace","set_flag",
+            // S7-E：控制流图
+            "get_cfg",
+            // S7-G/H/I：补丁审计 / 模板 / GUI 焦点
+            "list_patches","restore_patch","format_with_dbg",
+            "gui_focus_disasm","gui_focus_dump"
         };
         v.push_back(std::move(p));
     }
@@ -334,6 +343,204 @@ std::vector<AgentPreset> defaultPresets()
             "list_modules","get_memory_map","get_page_protect",
             "list_functions","get_module_imports","get_module_exports",
             "list_labels","rag_search"
+        };
+        v.push_back(std::move(p));
+    }
+
+    // 8) 破解许可校验（S7）
+    {
+        AgentPreset p;
+        p.id           = "crack-license";
+        p.name         = "破解许可校验";
+        p.description  = "定位许可/序列号校验分支，通过 set_flag 或 assemble_at/pattern_replace 强行通过。";
+        p.systemPrompt =
+            "You are a reverse engineering assistant focused on bypassing license/serial checks. "
+            "Workflow: (1) find_xrefs_to common comparison APIs (strcmp/wcscmp/memcmp/lstrcmp*) "
+            "and string references to messages like 'Invalid', 'Trial', 'Registered'; "
+            "(2) get_disasm on the comparator's caller(s) to locate the conditional jump that "
+            "gates 'success vs failure'; (3) choose the LEAST invasive bypass: "
+            "  - if execution is paused right at the test/cmp, set_flag(ZF, true|false) to force the branch this run; "
+            "  - to make the patch persistent, assemble_at to flip JE<->JNE, or NOP the jump, "
+            "    or use pattern_replace for a wide search. ALWAYS show the original bytes first "
+            "    (via get_disasm) and explain WHY each byte change is correct. "
+            "(4) verify by stepping past the gate (step_over) and inspecting the resulting branch. "
+            "(5) list_patches at the end so the user sees exactly what was modified; "
+            "tell them they can restore_patch any address to undo. "
+            "SAFETY: prefer set_flag for a quick test; only assemble_at / pattern_replace when "
+            "the user clearly wants persistence. NEVER patch without first showing the original. "
+            "EVIDENCE RULE: every patched address must be backed by disasm you actually read. "
+            "OUTPUT LANGUAGE RULE (highest priority, applies to your final answer / "
+            "the `content` field, NOT to your internal reasoning): the user-facing answer MUST be "
+            "written in Simplified Chinese (zh-CN). Keep code, hex addresses, registers, "
+            "instructions and identifiers verbatim.";
+        p.userTemplate =
+            "Find and bypass the license / serial check around {{cip}} in {{module}}.\n"
+            "Initial disasm:\n```\n{{disasm}}\n```\n"
+            "User intent: {{user}}";
+        p.enabledTools = {
+            // 定位
+            "get_disasm","read_memory","read_string","get_registers",
+            "find_xrefs_to","get_function_range","search_pattern","locate_api_callers",
+            "get_cfg","list_modules",
+            // 注释（沉淀分析点）
+            "set_comment","get_comment",
+            // 试验：先暂停再翻转标志
+            "set_breakpoint","remove_breakpoint","step_in","step_over","run_until",
+            "run_continue","pause_debug",
+            "set_flag",
+            // 持久化补丁
+            "assemble_at","pattern_replace","patch_memory",
+            // 审计
+            "list_patches","restore_patch",
+            "gui_focus_disasm"
+        };
+        v.push_back(std::move(p));
+    }
+
+    // 9) 反反调试（S7）
+    {
+        AgentPreset p;
+        p.id           = "anti-anti-debug";
+        p.name         = "反反调试";
+        p.description  = "扫描典型反调试 API（IsDebuggerPresent / NtQueryInformationProcess 等），中和它们。";
+        p.systemPrompt =
+            "You are a reverse engineering assistant whose job is to neutralize anti-debug tricks "
+            "in the debuggee. "
+            "Workflow: (1) locate_api_callers for the classic anti-debug surface: "
+            "IsDebuggerPresent, CheckRemoteDebuggerPresent, NtQueryInformationProcess "
+            "(ProcessDebugPort/ProcessDebugFlags/ProcessDebugObjectHandle), NtSetInformationThread "
+            "(HideFromDebugger), OutputDebugStringA/W (timing trick), GetTickCount/QueryPerformanceCounter "
+            "(timing). (2) For each call site, get_disasm and identify how the return value is used. "
+            "(3) Choose the safest neutralization for this caller: "
+            "  - set a conditional breakpoint with set_conditional_bp that forces the return value "
+            "    via a `command` like 'mov eax, 0; ret' style script; "
+            "  - or assemble_at right after the call to overwrite the return value (e.g. xor eax,eax; nop); "
+            "  - or simpler: set_hw_breakpoint(execute) on the API entry to pause and inspect. "
+            "(4) After patching, run_continue and verify the program no longer takes the 'debugger detected' path. "
+            "Use set_label to mark each neutralized site (e.g. 'antidbg_isdbgpresent_bypassed'). "
+            "EVIDENCE RULE: every modification must be justified by an actual locate_api_callers / "
+            "get_disasm result. Do NOT patch a call you have not inspected. "
+            "OUTPUT LANGUAGE RULE: final answer in Simplified Chinese; keep API names, hex, asm verbatim.";
+        p.userTemplate =
+            "Find and neutralize anti-debug checks in {{module}}.\n"
+            "Initial context around {{cip}}:\n```\n{{disasm}}\n```";
+        p.enabledTools = {
+            "get_disasm","read_memory","read_string","get_registers","list_modules",
+            "find_xrefs_to","get_function_range","locate_api_callers","search_pattern",
+            "get_module_imports","list_functions",
+            // 标注
+            "set_label","get_label","set_comment","get_comment",
+            "list_labels","list_comments",
+            // 控制
+            "set_breakpoint","remove_breakpoint","set_hw_breakpoint","remove_hw_breakpoint",
+            "set_conditional_bp",
+            "step_in","step_over","step_out","run_until","run_continue","pause_debug",
+            // 写
+            "assemble_at","pattern_replace","patch_memory","set_register","set_flag",
+            // 审计
+            "list_patches","restore_patch",
+            "gui_focus_disasm"
+        };
+        v.push_back(std::move(p));
+    }
+
+    // 10) CFG 探索（S7）
+    {
+        AgentPreset p;
+        p.id           = "cfg-explorer";
+        p.name         = "控制流图探索";
+        p.description  = "对当前函数生成 Mermaid 控制流图，并解释每个分支的语义。纯只读。";
+        p.systemPrompt =
+            "You are a reverse engineering assistant building a control-flow graph view. "
+            "Workflow: (1) get_function_range for the function containing the given VA; "
+            "(2) get_cfg(entry) to obtain the Mermaid graph TD; "
+            "(3) for each non-trivial node (loop heads, conditional branches with rich predicates, "
+            "indirect-call nodes), get_disasm of that block and explain what it does; "
+            "(4) summarize: entry, exits (RET nodes), back-edges (loops), unreachable-looking branches. "
+            "OUTPUT: Always include the raw Mermaid block verbatim inside a ```mermaid fenced code "
+            "block so the UI can render it. Then below, give the per-block explanation in Chinese. "
+            "EVIDENCE RULE: never invent edges or block semantics that get_cfg / get_disasm did not show. "
+            "OUTPUT LANGUAGE RULE: final answer in Simplified Chinese; code/hex/asm verbatim.";
+        p.userTemplate =
+            "Render and explain the CFG of the function at {{cip}} ({{module}}).";
+        p.enabledTools = {
+            "get_cfg","get_function_range","get_disasm","read_memory","read_string",
+            "find_xrefs_to","list_labels","list_comments","get_label","get_comment",
+            "list_modules","eval_expression",
+            "gui_focus_disasm"
+        };
+        p.maxIter = 12;
+        v.push_back(std::move(p));
+    }
+
+    // 11) 补丁验证（S7）
+    {
+        AgentPreset p;
+        p.id           = "patch-and-verify";
+        p.name         = "补丁与验证";
+        p.description  = "审查既有补丁、回滚不需要的、为新补丁建立流程：先备份原字节、再修改、再单步验证。";
+        p.systemPrompt =
+            "You are a reverse engineering assistant managing binary patches. "
+            "Workflow: (1) list_patches (optionally filter by module) to show the user the current "
+            "patch state; (2) for each patch the user wants to inspect, get_disasm at the address "
+            "with a small window so they see context; (3) if asked to undo, restore_patch each address; "
+            "(4) for NEW patches: ALWAYS first record the original disasm + raw bytes (read_memory) "
+            "into your reply, then assemble_at / patch_memory, then get_disasm again to confirm; "
+            "(5) optionally set_breakpoint + step_over to dynamically verify behavior. "
+            "(6) End the session with another list_patches so the user has a clear delta. "
+            "SAFETY: never patch and immediately run_continue without offering the user a chance "
+            "to inspect; never restore_patch without first showing what is currently there. "
+            "OUTPUT LANGUAGE RULE: final answer in Simplified Chinese; code/hex/asm verbatim.";
+        p.userTemplate =
+            "Audit and manage patches around {{cip}} ({{module}}).\n"
+            "User request: {{user}}";
+        p.enabledTools = {
+            "list_patches","restore_patch",
+            "get_disasm","read_memory","get_registers","find_xrefs_to","get_function_range",
+            "list_modules","eval_expression",
+            "assemble_at","patch_memory","pattern_replace",
+            "set_breakpoint","remove_breakpoint","step_in","step_over","run_until",
+            "run_continue","pause_debug",
+            "set_comment","get_comment",
+            "gui_focus_disasm","gui_focus_dump"
+        };
+        v.push_back(std::move(p));
+    }
+
+    // 12) 输入追踪（S7）
+    {
+        AgentPreset p;
+        p.id           = "trace-input";
+        p.name         = "追踪输入数据";
+        p.description  = "用 HW write 断点跟踪一个内存地址被谁修改；适合追溯解密缓冲区、密钥写入点。";
+        p.systemPrompt =
+            "You are a reverse engineering assistant tracing data flow. "
+            "Goal: identify every code site that WRITES to a target memory address. "
+            "Workflow: (1) confirm the target VA (the user supplies it, or read_memory at {{cip}} "
+            "to derive it); (2) set_hw_breakpoint(address=target, type=write) — there are only 4 "
+            "hardware BP slots, so remove unused ones first if necessary; "
+            "(3) run_continue and wait_for_event; "
+            "(4) on each hit: get_registers + get_disasm at the writing instruction; "
+            "format_with_dbg can render templates like '{x:[rsp]}' to print arguments inline; "
+            "(5) set_comment at the writer site to remember what wrote what; "
+            "(6) decide: continue (more writers expected) or stop; "
+            "(7) summarize all distinct writer sites with their disasm + the value they wrote. "
+            "Optionally use gui_focus_dump to keep the user's dump pane following the address. "
+            "SAFETY: ALWAYS remove_hw_breakpoint at the end so the slot is freed. "
+            "EVIDENCE RULE: only list writers that an HW BP actually hit; do not speculate. "
+            "OUTPUT LANGUAGE RULE: final answer in Simplified Chinese; code/hex/asm verbatim.";
+        p.userTemplate =
+            "Trace writes to the memory address derived around {{cip}} ({{module}}).\n"
+            "User intent: {{user}}";
+        p.enabledTools = {
+            "set_hw_breakpoint","remove_hw_breakpoint",
+            "set_breakpoint","remove_breakpoint","list_breakpoints",
+            "run_continue","pause_debug","wait_for_event","step_in","step_over","run_until",
+            "get_registers","get_disasm","read_memory","read_string",
+            "find_xrefs_to","get_function_range","get_callstack",
+            "format_with_dbg","eval_expression","list_modules",
+            "set_comment","get_comment","set_label",
+            "gui_focus_disasm","gui_focus_dump"
         };
         v.push_back(std::move(p));
     }

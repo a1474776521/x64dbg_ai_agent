@@ -54,6 +54,10 @@ set(PLUGIN_SOURCES
     ai/tools/debug_navigation_tools.cpp
     ai/tools/annotation_tools.cpp
     ai/tools/program_map_tools.cpp
+    ai/tools/advanced_bp_tools.cpp
+    ai/tools/assembler_pattern_tools.cpp
+    ai/tools/cfg_tool.cpp
+    ai/tools/patch_misc_tools.cpp
 
     # debugger
     debugger/disasm_context.cpp

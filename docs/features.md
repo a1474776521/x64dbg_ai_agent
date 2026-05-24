@@ -238,7 +238,7 @@
 | `%APPDATA%\x64dbg-ai-plugin\logs\plugin.log` | spdlog 文件输出 | `XAI_LOG_*` 宏 |
 | `%APPDATA%\x64dbg-ai-plugin\logs\write_audit.log` | S3 写工具审计（JSON 一行一条；rotating 4 MB×10） | `util/logging.cpp::auditLog` |
 | `%APPDATA%\x64dbg-ai-plugin\projects\<sha>.db` | 会话 + RAG 数据库 | `SessionStore` |
-| `%APPDATA%\x64dbg-ai-plugin\agent_presets.json` | Agent 预设（schemaVersion=10，S6 后 analyze-function 含全 37 个工具；新增 annotate-function/map-program 两预设） | `PresetStore` |
+| `%APPDATA%\x64dbg-ai-plugin\agent_presets.json` | Agent 预设（schemaVersion=11，S7 后 analyze-function 含全 49 个工具；新增 crack-license/anti-anti-debug/cfg-explorer/patch-and-verify/trace-input 共 5 个新预设，连同 S6 的 annotate-function/map-program，预设总数=12） | `PresetStore` |
 | `%APPDATA%\x64dbg-ai-plugin\scripts\` | S5 agent 脚本目录；`list_scripts` / `load_script` / `run_script_file` 相对路径基准 | `util/paths.cpp::pluginScriptsDir` |
 | `%APPDATA%\x64dbg-ai-plugin\secrets\*.bin` | DPAPI 加密的 token/key | `SecretStore` |
 
@@ -285,7 +285,7 @@
 
 LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什么、再算什么、何时回答"。
 
-### 工具清单（S6 后 37 个：26 个只读 + 3 个控制 + 8 个写）
+### 工具清单（S7 后 49 个：29 个只读 + 5 个控制 + 15 个写）
 
 | 类别 | 工具 | 说明 |
 |---|---|---|
@@ -327,6 +327,18 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 | **S6-E 程序地图**（全 Read） | `list_functions(module?)` | `Script::Function::GetList`；module 是大小写不敏感子串过滤；每条返回 module/rva_start/rva_end/manual/instruction_count；硬截断 256 KB |
 |  | `get_module_imports(module)` | `Script::Module::GetImports`；返回 name/undecorated/ordinal/iat_va/iat_rva |
 |  | `get_module_exports(module)` | `Script::Module::GetExports`；返回 name/undecorated/ordinal/va/rva/forwarded(+forward_name) |
+| **S7-A 高级断点**（全 Write+confirm+audit） | `set_hw_breakpoint(address, type=execute\|write\|access)` | `Script::Debug::SetHardwareBreakpoint`；只允许选 type（DR7 LEN 由 SDK 内部决定）；DR0–DR3 共 4 槽，超限 SDK 返 false |
+|  | `remove_hw_breakpoint(address)` | `Script::Debug::DeleteHardwareBreakpoint`；不存在不报错（read-after-write 语义） |
+| **S7-B 条件断点**（Write+confirm+audit） | `set_conditional_bp(address, condition?, logText?, logCondition?, command?, commandCondition?, fastResume?, silent?, name?)` | 在既有软断点上设字段；`BpRefVa(&ref, bp_normal, va)` + `BpSetFieldText/Number(bpf_*)`；空串清字段；中途失败即返不回滚（applied 字段告知 LLM 哪些生效） |
+| **S7-C 汇编**（Write+confirm+audit） | `assemble_at(address, instruction, fill_nop=true)` | `Script::Assembler::AssembleMemEx`；新指令短于原指令时默认 NOP 填充；失败时把 capstone 错误文本（MAX_ERROR_SIZE=512）一并返回 |
+| **S7-D 模式替换**（Write+confirm+audit） | `pattern_replace(start, size, search_pattern, replace_pattern)` | `Script::Pattern::SearchAndReplaceMem`；`??` 通配；size≤16MB（与 set_page_protect 同安全线） |
+| **S7-E CFG**（Read） | `get_cfg(entry)` | `DbgAnalyzeFunction` → `BridgeCFGraph(list, freedata=true)` RAII；输出 Mermaid `graph TD`，条件边 `-->|T|` / `-->|F|`，入口节点 classDef 高亮；256 节点截断 |
+| **S7-F 标志位**（Write+confirm+audit） | `set_flag(name, value)` | `Script::Flag::Set`；name ∈ {ZF,OF,CF,PF,SF,TF,AF,DF,IF} |
+| **S7-G 补丁审计** | `list_patches(module?)` (Read) | `DbgFunctions()->PatchEnum` 两阶段查询；模块名子串大小写不敏感；4096 条上限；每条=单字节 diff |
+|  | `restore_patch(address)` (Write+confirm+audit) | `DbgFunctions()->PatchRestore` |
+| **S7-H 模板**（Read） | `format_with_dbg(template)` | `DbgFunctions()->StringFormatInline`；支持 `{x:[rax+8]}` / `{s:[rcx]}`；4 KB 输出缓冲 |
+| **S7-I GUI 焦点**（DbgControl，无副作用、无 confirm） | `gui_focus_disasm(address)` | `GuiDisasmAt(addr, addr)`；滚动反汇编视图 |
+|  | `gui_focus_dump(address, index=1)` | index=1 走 `GuiDumpAt`；2–5 走 `GuiDumpAtN(va, index-1)` |
 
 ### ToolPolicy 三档（S3）
 
@@ -421,14 +433,14 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 
 ```json
 {
-  "schemaVersion": 9,
+  "schemaVersion": 11,
   "presets": [{ "id": "...", "name": "...", "systemPrompt": "...", "userTemplate": "...",
                 "enabledTools": ["..."], "maxIter": 20, "temperature": 0.2,
                 "provider": "deepseek", "model": "", "showInContextMenu": true, "readonly": true }]
 }
 ```
 
-- 启动时 `diskSchema < kPresetSchemaVersion(=9)`：用新版 defaults 覆盖所有 readonly；用户预设保留
+- 启动时 `diskSchema < kPresetSchemaVersion(=11)`：用新版 defaults 覆盖所有 readonly；用户预设保留
 - 保存：`rename(.tmp → final)`；rename Access Denied（avast/Defender 抢锁）时 3 次重试 50 ms 间隔 + 原地 ofstream 覆写 fallback
 
 ---

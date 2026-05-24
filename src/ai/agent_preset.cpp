@@ -162,7 +162,15 @@ std::vector<AgentPreset> defaultPresets()
             // S4：数据写
             "patch_memory","set_register","write_string",
             // S5：脚本
-            "list_scripts","load_script","run_script_file"
+            "list_scripts","load_script","run_script_file",
+            // S6-A：调试导航
+            "run_continue","pause_debug","step_out",
+            // S6-B/C：标签注释（沉淀分析结论）
+            "set_label","get_label","list_labels",
+            "set_comment","get_comment","list_comments",
+            // S6-D/E：程序地图
+            "get_memory_map","get_page_protect","set_page_protect",
+            "list_functions","get_module_imports","get_module_exports"
         };
         v.push_back(std::move(p));
     }
@@ -254,6 +262,79 @@ std::vector<AgentPreset> defaultPresets()
             "get_disasm","read_memory","read_string","find_xrefs_to","get_registers"
         };
         p.maxIter = 6;
+        v.push_back(std::move(p));
+    }
+
+    // 6) 标注当前函数（沉淀分析结论：label + comment）
+    {
+        AgentPreset p;
+        p.id           = "annotate-function";
+        p.name         = "标注当前函数";
+        p.description  = "分析当前函数并把结论沉淀为 x64dbg 的 label/comment（写入 .dd64 数据库）。";
+        p.systemPrompt =
+            "You are a reverse engineering assistant. "
+            "Your goal is to ANALYZE the current function and PERSIST your findings as "
+            "x64dbg labels and comments so future sessions benefit. "
+            "Workflow: get_function_range -> get_disasm (cover the body) -> "
+            "identify role of the function and key sub-blocks/branches -> "
+            "set_label at the function entry (a short snake_case name like "
+            "'decrypt_payload' or 'check_license_key') -> "
+            "set_comment at notable instructions (loop heads, API calls, magic constants, "
+            "key branches). Keep each comment under ~80 chars. "
+            "Use list_labels / list_comments first to avoid overwriting existing notes "
+            "that look more authoritative than yours. "
+            "EVIDENCE RULE: every label/comment must be justified by disasm you actually "
+            "read in this session. Do NOT invent semantics. "
+            "OUTPUT LANGUAGE RULE (highest priority, applies to your final answer / "
+            "the `content` field, NOT to your internal reasoning): the user-facing "
+            "answer MUST be written in Simplified Chinese (zh-CN). Labels themselves "
+            "stay ASCII snake_case; comments may use Chinese. "
+            "Keep code, hex addresses, register names, instructions and identifiers "
+            "verbatim (do not translate them).";
+        p.userTemplate =
+            "Analyze and annotate the function at {{cip}} ({{module}}).\n"
+            "Initial disasm:\n```\n{{disasm}}\n```";
+        p.enabledTools = {
+            // 读
+            "get_disasm","read_memory","read_string","get_registers",
+            "find_xrefs_to","get_function_range","search_pattern",
+            "list_labels","get_label","list_comments","get_comment",
+            // 写（沉淀）
+            "set_label","set_comment"
+        };
+        v.push_back(std::move(p));
+    }
+
+    // 7) 程序地图（纯读：函数列表 + 内存映射 + IAT/EAT）
+    {
+        AgentPreset p;
+        p.id           = "map-program";
+        p.name         = "程序地图";
+        p.description  = "纵览程序全貌：函数列表、内存映射、模块导入/导出。纯只读。";
+        p.systemPrompt =
+            "You are a reverse engineering assistant building a 'program map'. "
+            "Goal: give the user a high-level overview of the debuggee. "
+            "Workflow: list_modules -> get_memory_map (note RWX or unusual private "
+            "regions) -> list_functions (filter by the main module) -> "
+            "get_module_imports of the main module (group by API category: crypto / net "
+            "/ file / process / anti-debug / GUI / etc.) -> get_module_exports if it is "
+            "a DLL. "
+            "Report: (1) module list, (2) suspicious memory regions (RWX, unbacked "
+            "private executable), (3) function count per module, (4) interesting import "
+            "clusters, (5) export surface for DLLs. "
+            "EVIDENCE RULE: every claim must come from a tool result this session. "
+            "OUTPUT LANGUAGE RULE (highest priority, applies to your final answer / "
+            "the `content` field, NOT to your internal reasoning): the user-facing "
+            "answer MUST be written in Simplified Chinese (zh-CN). Keep code, hex "
+            "addresses, module/API names verbatim.";
+        p.userTemplate =
+            "Build a program map of the currently debugged target. "
+            "Main module appears to be {{module}}.";
+        p.enabledTools = {
+            "list_modules","get_memory_map","get_page_protect",
+            "list_functions","get_module_imports","get_module_exports",
+            "list_labels","rag_search"
+        };
         v.push_back(std::move(p));
     }
 

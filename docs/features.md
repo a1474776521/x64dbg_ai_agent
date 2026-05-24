@@ -238,7 +238,7 @@
 | `%APPDATA%\x64dbg-ai-plugin\logs\plugin.log` | spdlog 文件输出 | `XAI_LOG_*` 宏 |
 | `%APPDATA%\x64dbg-ai-plugin\logs\write_audit.log` | S3 写工具审计（JSON 一行一条；rotating 4 MB×10） | `util/logging.cpp::auditLog` |
 | `%APPDATA%\x64dbg-ai-plugin\projects\<sha>.db` | 会话 + RAG 数据库 | `SessionStore` |
-| `%APPDATA%\x64dbg-ai-plugin\agent_presets.json` | Agent 预设（schemaVersion=9，S5 后 analyze-function 含全部 9 个写工具 + 3 个脚本工具） | `PresetStore` |
+| `%APPDATA%\x64dbg-ai-plugin\agent_presets.json` | Agent 预设（schemaVersion=10，S6 后 analyze-function 含全 37 个工具；新增 annotate-function/map-program 两预设） | `PresetStore` |
 | `%APPDATA%\x64dbg-ai-plugin\scripts\` | S5 agent 脚本目录；`list_scripts` / `load_script` / `run_script_file` 相对路径基准 | `util/paths.cpp::pluginScriptsDir` |
 | `%APPDATA%\x64dbg-ai-plugin\secrets\*.bin` | DPAPI 加密的 token/key | `SecretStore` |
 
@@ -285,7 +285,7 @@
 
 LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什么、再算什么、何时回答"。
 
-### 工具清单（S5 后 27 个：15 个只读 + 1 个控制 + 11 个写）
+### 工具清单（S6 后 37 个：26 个只读 + 3 个控制 + 8 个写）
 
 | 类别 | 工具 | 说明 |
 |---|---|---|
@@ -315,6 +315,18 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 | **S5 脚本**（list_scripts 是 Read；其余 Write + 5s confirm + audit） | `list_scripts()` | 枚举 `%APPDATA%\x64dbg-ai-plugin\scripts\` 下 *.txt / *.script；返回 name/size_bytes/mtime_ms |
 |  | `load_script(path)` | 加载到 Script tab 但不执行；相对路径接 scripts 目录，绝对路径直接用；1 MB 上限；只接受 .txt / .script 扩展 |
 |  | `run_script_file(path)` | 加载 + 触发 Run（fire-and-forget）；x64dbg script 引擎没暴露"完成"事件，agent 想观察结果需用 wait_for_event(Paused/Breakpoint) 或后续工具查状态 |
+| **S6-A 调试导航**（run_continue 默认 fire-and-forget，其余 Write + 5s confirm + audit） | `run_continue(wait_for_stop=false, timeout_ms=30000)` | `Script::Debug::Run()`；默认不阻塞 agent loop；`wait_for_stop=true` 时调用 `Script::Debug::Wait` 等到 Paused/超时 |
+|  | `pause_debug(timeout_ms=5000)` | `Script::Debug::Pause()` + 等 Paused；用于打断长循环或异步暂停被调试程序 |
+|  | `step_out(timeout_ms=30000)` | `Script::Debug::StepOut()` + waitForStop；跳出当前函数到调用点下一条指令 |
+| **S6-B/C 沉淀**（set_* 是 Write+confirm+audit；get/list 是 Read） | `set_label(address, text)` / `set_comment(address, text)` | text="" 即删除（不暴露独立 delete_*）；UTF-8 ≤255 字节；写入 .dd64 数据库，跨会话持久化 |
+|  | `get_label(address)` / `get_comment(address)` | 单 VA 读 |
+|  | `list_labels()` / `list_comments()` | 全量列表；用 `BridgeList<T>` RAII；硬截断 256 KB |
+| **S6-D 内存映射**（set_page_protect 是 Write+confirm，其余 Read） | `get_memory_map()` | `DbgMemMap` 遍历 MEMPAGE；每页返回 base/size/state(commit/reserve/free)/type(image/mapped/private)/protect（RWX 风格字符串）/info（模块或段名） |
+|  | `get_page_protect(address)` | `Script::Memory::GetProtect` + GetBase/GetSize；返回 protect 字符串 + 原始 DWORD + 所在页基址/大小 |
+|  | `set_page_protect(address, protect, size)` | `Script::Memory::SetProtect`；protect 接受 "RW"/"RWX"/"R-X"/"---" 等 RWX 风格字符串（不支持 GUARD/NOCACHE 修饰位）；size 上限 16 MB |
+| **S6-E 程序地图**（全 Read） | `list_functions(module?)` | `Script::Function::GetList`；module 是大小写不敏感子串过滤；每条返回 module/rva_start/rva_end/manual/instruction_count；硬截断 256 KB |
+|  | `get_module_imports(module)` | `Script::Module::GetImports`；返回 name/undecorated/ordinal/iat_va/iat_rva |
+|  | `get_module_exports(module)` | `Script::Module::GetExports`；返回 name/undecorated/ordinal/va/rva/forwarded(+forward_name) |
 
 ### ToolPolicy 三档（S3）
 

@@ -39,4 +39,20 @@ void registerDataWriteTools(ToolRegistry& reg);
 //   list_scripts (Read) / load_script (Write) / run_script_file (Write)
 void registerScriptTools(ToolRegistry& reg);
 
+// 在 reg 中注册调试导航工具（S6-A）：
+//   run_continue / pause_debug / step_out
+// run_continue 默认 fire-and-forget；可选 wait_for_stop=true 阻塞至 Paused
+void registerDebugNavigationTools(ToolRegistry& reg);
+
+// 在 reg 中注册标签/注释工具（S6-B + S6-C）：
+//   set_label / get_label / list_labels
+//   set_comment / get_comment / list_comments
+// set_* 是 Write+confirm；text="" 即删除。
+void registerAnnotationTools(ToolRegistry& reg);
+
+// 在 reg 中注册程序地图与内存映射工具（S6-D + S6-E）：
+//   get_memory_map / get_page_protect / set_page_protect (Write+confirm)
+//   list_functions / get_module_imports / get_module_exports
+void registerProgramMapTools(ToolRegistry& reg);
+
 }  // namespace x64ai

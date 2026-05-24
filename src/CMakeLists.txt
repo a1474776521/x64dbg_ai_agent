@@ -51,6 +51,9 @@ set(PLUGIN_SOURCES
     ai/tools/debug_write_tools.cpp
     ai/tools/data_write_tools.cpp
     ai/tools/script_tools.cpp
+    ai/tools/debug_navigation_tools.cpp
+    ai/tools/annotation_tools.cpp
+    ai/tools/program_map_tools.cpp
 
     # debugger
     debugger/disasm_context.cpp

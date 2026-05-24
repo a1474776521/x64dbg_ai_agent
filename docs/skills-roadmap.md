@@ -4,13 +4,13 @@
 > **每次完成一个 S 段后，更新本表的 ✅/❌ 列 + Done 行**。
 > 横向对照：[features.md](features.md) 是最终能力快照；本文件是规划+进度。
 
-最后更新：2026-05-24（S5 完成；S6/S7/S8 未启动）
+最后更新：2026-05-24（S6 完成；S7/S8 未启动）
 
 ---
 
 ## 1. 工具（"技能"）矩阵
 
-### 1.1 已实现（27 个，✅ = 真机可用）
+### 1.1 已实现（37 个，✅ = 真机可用）
 
 | # | 类别 | 工具 | 状态 | 能力一句话 | SDK API | 阶段 |
 |---|---|---|---|---|---|---|
@@ -41,55 +41,58 @@
 | 25 | 脚本 | `list_scripts` | ✅ | 列 scripts/ 目录 | `std::filesystem` | S5 |
 | 26 | 脚本 | `load_script` | ✅ | 加载到 Script tab 不执行 | `DbgScriptLoad` | S5 |
 | 27 | 脚本 | `run_script_file` | ✅ | Load + Run（fire-and-forget） | `DbgScriptRun(0)` | S5 |
+| 28 | 调试控制 | `run_continue` | ✅ | 继续运行（默认 fire-and-forget；wait_for_stop=true 阻塞） | `Script::Debug::Run` + `Wait` | S6 |
+| 29 | 调试控制 | `pause_debug` | ✅ | 异步打断 + 等 Paused（5s 超时） | `Script::Debug::Pause` + `Wait` | S6 |
+| 30 | 调试写 | `step_out` | ✅ | 跳出当前函数（同步等 30s） | `Script::Debug::StepOut` + `Wait` | S6 |
+| 31 | 沉淀 | `set_label` | ✅ | 设置/删除（text=""）标签，写入 .dd64 | `Script::Label::Set/Delete` | S6 |
+| 32 | 沉淀 | `get_label` | ✅ | 读单个 VA 的标签 | `Script::Label::Get` | S6 |
+| 33 | 沉淀 | `list_labels` | ✅ | 全量标签列表 | `Script::Label::GetList` | S6 |
+| 34 | 沉淀 | `set_comment` | ✅ | 设置/删除（text=""）注释，写入 .dd64 | `Script::Comment::Set/Delete` | S6 |
+| 35 | 沉淀 | `get_comment` | ✅ | 读单个 VA 的注释 | `Script::Comment::Get` | S6 |
+| 36 | 沉淀 | `list_comments` | ✅ | 全量注释列表 | `Script::Comment::GetList` | S6 |
+| 37 | 内存映射 | `get_memory_map` | ✅ | 全量内存映射（base/size/state/RWX/info） | `DbgMemMap` | S6 |
+| 38 | 内存映射 | `get_page_protect` | ✅ | 读单 VA 的页保护 | `Script::Memory::GetProtect` | S6 |
+| 39 | 内存映射 | `set_page_protect` | ✅ | 改区段 RWX（Write+confirm） | `Script::Memory::SetProtect` | S6 |
+| 40 | 程序地图 | `list_functions` | ✅ | 所有已分析函数（可按模块过滤） | `Script::Function::GetList` | S6 |
+| 41 | 程序地图 | `get_module_imports` | ✅ | 指定模块 IAT 列表 | `Script::Module::GetImports` | S6 |
+| 42 | 程序地图 | `get_module_exports` | ✅ | 指定模块 EAT 列表 | `Script::Module::GetExports` | S6 |
 
-**小计**：15 读 + 1 控制 + 11 写 = **27**
+**小计**：15(原读) + 6(S6 新读：3 label + 3 comment) + 5(S6 新读：memory_map/page_protect/list_functions/imports/exports) + 1(原控制) + 2(S6 新控制：run_continue/pause_debug) + 11(原写) + 2(S6 新写：step_out/set_page_protect) + 1(S6 沉淀写 set_label) + 1(S6 沉淀写 set_comment) = **37**
+（更直白：26 读 + 3 控制 + 8 写 = 37）
 
 ### 1.2 计划中（按 ROI 排序）
 
-#### P0 基础缺口（S6 目标，10 个）
-
-| # | 类别 | 工具 | 状态 | 能力一句话 | SDK API | 阶段 |
-|---|---|---|---|---|---|---|
-| 28 | 调试控制 | `run_continue` | ❌ | **继续运行**（目前只能走 run_dbg_command） | `Script::Debug::Run` | S6 |
-| 29 | 调试控制 | `pause_debug` | ❌ | 异步打断长循环 | `Script::Debug::Pause` | S6 |
-| 30 | 调试控制 | `step_out` | ❌ | 跳出当前函数 | `Script::Debug::StepOut` | S6 |
-| 31 | 沉淀 | `set_label` / `get_label` / `list_labels` | ❌ | AI 命名子程序，跨会话持久化 | `Script::Label::*` | S6 |
-| 32 | 沉淀 | `set_comment` / `get_comment` / `list_comments` | ❌ | AI 把语义注释写回反汇编 | `Script::Comment::*` | S6 |
-| 33 | 内存映射 | `get_memory_map` | ❌ | 全量内存映射（可执行段/堆/栈） | `DbgMemMap` | S6 |
-| 34 | 内存映射 | `get_page_protect` / `set_page_protect` | ❌ | 改 RWX 才能写 shellcode 区 | `Script::Memory::Get/SetProtect` | S6 |
-| 35 | 程序地图 | `list_functions` | ❌ | LLM 一张程序地图 | `Script::Function::GetList` | S6 |
-| 36 | 程序地图 | `get_module_imports` | ❌ | IAT 列表 / 识别 hook | `Script::Module::GetImports` | S6 |
-| 37 | 程序地图 | `get_module_exports` | ❌ | 导出表 | `Script::Module::GetExports` | S6 |
+#### P0（S6 已完成 ✅ — 见 1.1 表第 28–42 行）
 
 #### P1 高 ROI（S7 目标，10 个）
 
 | # | 类别 | 工具 | 状态 | 能力一句话 | SDK API | 阶段 |
 |---|---|---|---|---|---|---|
-| 38 | 高级断点 | `set_hw_breakpoint` / `remove_hw_breakpoint` | ❌ | 硬件断点 R/W/X 监控变量 | `Script::Debug::SetHardwareBreakpoint` | S7 |
-| 39 | 高级断点 | `set_conditional_bp` | ❌ | 条件断点 + log 断点 + 命令断点三合一 | `BpSetFieldText(bpf_*)` | S7 |
-| 40 | 汇编 | `assemble_at` | ❌ | 写汇编（"jne→jmp"），比手算字节准 | `Script::Assembler::AssembleMem` | S7 |
-| 41 | 模式 | `pattern_replace` | ❌ | 一行批量替换 pattern | `Script::Pattern::SearchAndReplaceMem` | S7 |
-| 42 | CFG | `get_cfg` | ❌ | 函数基本块+边，可序列化 mermaid | `DbgAnalyzeFunction` → `BridgeCFGraph` | S7 |
-| 43 | 标志 | `set_flag` | ❌ | 强制改 ZF 让 je 跳走 | `Script::Flag::Set` | S7 |
-| 44 | 补丁 | `list_patches` | ❌ | 列已打补丁 | `DbgFunctions()->PatchEnum` | S7 |
-| 45 | 补丁 | `restore_patch` | ❌ | 回滚单个补丁 | `DbgFunctions()->PatchRestore` | S7 |
-| 46 | 格式化 | `format_with_dbg` | ❌ | x64dbg 原生模板 `{x:[rax+8]}` | `DbgFunctions()->StringFormatInline` | S7 |
-| 47 | GUI | `gui_focus_disasm` / `gui_focus_dump` | ❌ | 引导用户视线"看这里" | `GuiDisasmAt` / `GuiDumpAt` | S7 |
+| 43 | 高级断点 | `set_hw_breakpoint` / `remove_hw_breakpoint` | ❌ | 硬件断点 R/W/X 监控变量 | `Script::Debug::SetHardwareBreakpoint` | S7 |
+| 44 | 高级断点 | `set_conditional_bp` | ❌ | 条件断点 + log 断点 + 命令断点三合一 | `BpSetFieldText(bpf_*)` | S7 |
+| 45 | 汇编 | `assemble_at` | ❌ | 写汇编（"jne→jmp"），比手算字节准 | `Script::Assembler::AssembleMem` | S7 |
+| 46 | 模式 | `pattern_replace` | ❌ | 一行批量替换 pattern | `Script::Pattern::SearchAndReplaceMem` | S7 |
+| 47 | CFG | `get_cfg` | ❌ | 函数基本块+边，可序列化 mermaid | `DbgAnalyzeFunction` → `BridgeCFGraph` | S7 |
+| 48 | 标志 | `set_flag` | ❌ | 强制改 ZF 让 je 跳走 | `Script::Flag::Set` | S7 |
+| 49 | 补丁 | `list_patches` | ❌ | 列已打补丁 | `DbgFunctions()->PatchEnum` | S7 |
+| 50 | 补丁 | `restore_patch` | ❌ | 回滚单个补丁 | `DbgFunctions()->PatchRestore` | S7 |
+| 51 | 格式化 | `format_with_dbg` | ❌ | x64dbg 原生模板 `{x:[rax+8]}` | `DbgFunctions()->StringFormatInline` | S7 |
+| 52 | GUI | `gui_focus_disasm` / `gui_focus_dump` | ❌ | 引导用户视线"看这里" | `GuiDisasmAt` / `GuiDumpAt` | S7 |
 
 #### P2 场景化（S8+ 按需）
 
 | # | 类别 | 工具 | 状态 | 场景 | SDK API | 阶段 |
 |---|---|---|---|---|---|---|
-| 48 | 反调试 | `get_peb_address` / `get_thread_list` | ❌ | 读 PEB.BeingDebugged | `DbgGetPebAddress` / `DbgGetThreadList` | S8 |
-| 49 | 恶意软件 | `enum_handles` | ❌ | 列打开的文件/互斥体 | `DbgFunctions()->EnumHandles` | S8 |
-| 50 | 恶意软件 | `enum_tcp_connections` | ❌ | C2 连接 | `DbgFunctions()->EnumTcpConnections` | S8 |
-| 51 | 异常 | `get_seh_chain` | ❌ | SEH 链分析 | `DbgFunctions()->GetSEHChain` | S8 |
-| 52 | 注入 | `remote_alloc` / `remote_free` | ❌ | 注入 shellcode 区 | `Script::Memory::RemoteAlloc/Free` | S8 |
-| 53 | 栈 | `stack_push` / `stack_pop` | ❌ | 栈修复 / 伪造返回地址 | `Script::Stack::Push/Pop` | S8 |
-| 54 | trace | `get_trace_record_hits` | ❌ | 找代码热点 / 未执行路径 | `DbgFunctions()->GetTraceRecord*` | S8 |
-| 55 | 翻译 | `enum_constants` / `error_code_to_name` | ❌ | `0xC0000005` → `ACCESS_VIOLATION` | `DbgFunctions()->EnumConstants` | S8 |
-| 56 | 函数 | `set_function_range` | ❌ | 修正分析器漏识别的函数 | `Script::Function::Add` | S8 |
-| 57 | 脚本 | `save_script` | ❌ | agent 写脚本到 scripts/（需 sandbox） | `std::filesystem` | S8 |
+| 53 | 反调试 | `get_peb_address` / `get_thread_list` | ❌ | 读 PEB.BeingDebugged | `DbgGetPebAddress` / `DbgGetThreadList` | S8 |
+| 54 | 恶意软件 | `enum_handles` | ❌ | 列打开的文件/互斥体 | `DbgFunctions()->EnumHandles` | S8 |
+| 55 | 恶意软件 | `enum_tcp_connections` | ❌ | C2 连接 | `DbgFunctions()->EnumTcpConnections` | S8 |
+| 56 | 异常 | `get_seh_chain` | ❌ | SEH 链分析 | `DbgFunctions()->GetSEHChain` | S8 |
+| 57 | 注入 | `remote_alloc` / `remote_free` | ❌ | 注入 shellcode 区 | `Script::Memory::RemoteAlloc/Free` | S8 |
+| 58 | 栈 | `stack_push` / `stack_pop` | ❌ | 栈修复 / 伪造返回地址 | `Script::Stack::Push/Pop` | S8 |
+| 59 | trace | `get_trace_record_hits` | ❌ | 找代码热点 / 未执行路径 | `DbgFunctions()->GetTraceRecord*` | S8 |
+| 60 | 翻译 | `enum_constants` / `error_code_to_name` | ❌ | `0xC0000005` → `ACCESS_VIOLATION` | `DbgFunctions()->EnumConstants` | S8 |
+| 61 | 函数 | `set_function_range` | ❌ | 修正分析器漏识别的函数 | `Script::Function::Add` | S8 |
+| 62 | 脚本 | `save_script` | ❌ | agent 写脚本到 scripts/（需 sandbox） | `std::filesystem` | S8 |
 
 ### 1.3 不包装（设计取舍）
 
@@ -109,24 +112,21 @@
 
 ## 2. 工作流预设（"预设"）矩阵
 
-### 2.1 已实现（5 个）
+### 2.1 已实现（7 个）
 
 | # | 预设 ID | 状态 | 中文名 | 启用工具 | 上下文菜单 | maxIter | 阶段 |
 |---|---|---|---|---|---|---|---|
-| 1 | `freeform` | ✅ | 自由 Agent | 全 27 | 否 | 20 | M4 |
-| 2 | `analyze-function` | ✅ | 分析当前函数 | 全 27（含写+脚本） | 是 | 20 | M4 + S3/4/5 扩 |
+| 1 | `freeform` | ✅ | 自由 Agent | 全 37 | 否 | 20 | M4 |
+| 2 | `analyze-function` | ✅ | 分析当前函数 | 全 37（含写+脚本+S6 沉淀+地图） | 是 | 20 | M4 + S3/4/5/6 扩 |
 | 3 | `who-calls-here` | ✅ | 谁调用了这里 | 8（纯读） | 是 | 20 | M4 |
 | 4 | `string-api-context` | ✅ | 字符串与 API 关联 | 7（纯读） | 是 | 20 | M4 |
 | 5 | `explain-here` | ✅ | 解释此处 | 5（纯读） | 是 | 6 | M4 |
+| 6 | `annotate-function` | ✅ | 标注当前函数 | 13（读 11 + 写 set_label/set_comment） | 是 | 20 | S6 |
+| 7 | `map-program` | ✅ | 程序地图 | 8（纯读：list_modules + memory_map + page_protect + list_functions + imports + exports + list_labels + rag_search） | 是 | 20 | S6 |
 
 ### 2.2 计划中
 
-#### S6 目标（基于沉淀类工具）
-
-| # | 预设 ID | 状态 | 中文名 | 依赖新工具 | 用途 |
-|---|---|---|---|---|---|
-| 6 | `annotate-function` | ❌ | 注释沉淀 | `set_label` / `set_comment` | 分析后把注释/标签写回 x64dbg，跨会话累积 |
-| 7 | `map-program` | ❌ | 程序总览 | `list_functions` / `get_memory_map` / `get_module_imports` | 新样本第一步：函数表+IAT+段表 |
+#### S6 目标（已完成 ✅ — 见 2.1 表第 6–7 行）
 
 #### S7 目标（基于高级断点+汇编）
 
@@ -158,7 +158,7 @@
 | S3 | ToolPolicy + 5s confirm + audit + 6 个写工具 | 6 | 0 | v7 | ✅ `s3-done` |
 | S4 | 数据写三件套 | 3 | 0 | v8 | ✅ `s4-done` |
 | S5 | 脚本三件套 | 3 | 0 | v9 | ✅ `s5-done` |
-| **S6** | **基础控制 + 沉淀（label/comment） + 程序地图** | **10** | **2** | **v10** | ❌ 未启动 |
+| **S6** | **基础控制 + 沉淀（label/comment） + 程序地图** | **10** | **2** | **v10** | ✅ `s6-done` |
 | **S7** | **高级断点 + 汇编 + CFG + 补丁管理** | **10** | **5** | **v11** | ❌ 未启动 |
 | **S8** | **场景化（反调试 / 恶意软件 / 注入 / 脱壳）** | **10** | **2** | **v12** | ❌ 未启动 |
 
@@ -171,3 +171,50 @@
 3. **取消工具/预设**：从表中删除并在 1.3 / 设计取舍区记原因。
 4. **schema 升级**：表 3 必记，并同步 `kPresetSchemaVersion` 与 features.md。
 5. 本文件是规划+进度，**详细技术细节**仍写在 features.md / known-issues.md / development-log.md。
+
+---
+
+## 5. 工具治理（待办，独立小段，不阻塞 S6/S7/S8）
+
+> 背景：工具数从 27 涨到 57 后，每次 chat completion 的 input tokens 会从 ~4k 涨到 ~8k，
+> 影响成本（DeepSeek 单次会话 $0.02→$0.04）和首 token 延迟（多 1-2 秒）。
+> 已有防御：**预设白名单**（`enabledTools` 只透传勾选的工具）+ `maxIter=20`。
+> 用户决定：**先推进 S6/S7/S8 加技能，治理后续做**。
+
+### 5.1 治理任务清单
+
+| # | 任务 | 优先级 | 状态 | 触发时机 |
+|---|---|---|---|---|
+| G-1 | 复查现有 27 工具 description 长度，全部砍到 ≤80 字 + 关键限制 | P1 | ❌ | S7 完成后 |
+| G-2 | 验证 DeepSeek / Copilot prompt caching 是否启用（system prompt + tools 缓存命中后 input 价 ÷10） | P0 | ❌ | S6 完成后立即查 |
+| G-3 | `AgentWorker` 加 `maxToolCalls=30` 配置（与 maxIter 区分） | P1 | ❌ | S7 |
+| G-4 | system prompt 加"同义工具决策树"（step_in/over/out/run_until/run_continue 何时用谁） | P1 | ❌ | S6 完成后 |
+| G-5 | PresetEditor UI 加"代价提示"：勾工具时显示"预计 +X tokens/轮" | P2 | ❌ | S8 |
+| G-6 | PresetEditor UI 加"工具分组开关"：按 category 整组勾选 | P2 | ❌ | S8 |
+| G-7 | write_audit.log 旁加 metrics 计数（read 工具不写大日志，只记总次数） | P3 | ❌ | 视需要 |
+| G-8 | （研究类）动态工具子集：第一轮 `request_tools(["category"])` 按需解锁 | P3 | ❌ | 实现复杂，暂不做 |
+| G-9 | 工具/预设描述与 userTemplate 中文化（详情见 5.3） | P2 | ❌ | S7 之后单独评估 |
+
+### 5.2 治理原则（S6/S7/S8 实施时附带遵守）
+
+1. **新工具 description ≤80 字**（已有 27 个不动，留给 G-1 统一过）
+2. **新预设严格白名单**：`map-program` 只开程序地图相关，不开写工具；不复制 `analyze-function` 的全集
+3. **同义/互斥工具在 description 里互相提示**（如新加的 `run_continue` 在 description 里写"step 类工具优先；只需要继续运行才用本工具"）
+4. **写工具继续依赖 5s confirm**（已有 ToolPolicy 兜底，治理层不重复造防御）
+
+### 5.3 G-9 工具/预设中文化（决策记录）
+
+S6 期间用户提出"全量中文化"诉求。结论 **暂不做，先收尾 S6**；列入 G-9 待 S7 之后单独评估。
+评估时按下面三档逐项过：
+
+| 字段 | 当前 | 中文化建议 | 理由 |
+|---|---|---|---|
+| 工具 `name()` | 英文 ASCII | **保持英文** | OpenAI/DeepSeek function-call schema 硬约束 `^[a-zA-Z0-9_-]{1,64}$`，中文 name 会被 400 拒绝 |
+| 工具 `description()` | 英文 | 可中文化（A 档） | LLM 能理解，但中文 token 占用 ~+30%，且会重置 prompt cache（先做 G-2 验证） |
+| 参数 schema `description` | 英文 | 可中文化（A 档） | 同上 |
+| 预设 `id` | 英文 kebab-case | **保持英文** | 持久化 key，配置文件/审计日志引用 |
+| 预设 `name` / `description` | 中文 | 已是中文 | — |
+| 预设 `systemPrompt` | 英文 + 末尾 zh-CN 输出强制 | **保持英文**（C 档不建议） | 实测 LLM 对英文指令服从度更稳；改中文需充分回归 |
+| 预设 `userTemplate` | 英文模板 | 可中文化（B 档） | 用户感知，影响较小 |
+
+实施前置条件：**G-2 验证 prompt cache 启用情况后再决定 A/B 档**。

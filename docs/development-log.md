@@ -723,3 +723,59 @@ x64dbg SDK 的 `_plugin_registercallback` 对同 `(plugin, type)` 后注册者�
 - 双架构 Release 编译通过，零警告。dp64 / dp32 已就位。
 - 工具总数：14 读 + 1 控制 + 9 写（S3+S4）+ 3 脚本（S5，含 1 读 + 2 写）= **27 工具**（15 读 / 1 控制 / 11 写）。
 - Git tag：`s5-done`。
+
+
+## S6：基础控制 + 沉淀（label/comment）+ 程序地图（2026-05-24）
+
+> 目标：补齐 agent 真正需要却之前缺位的"基础控制"（继续运行/异步暂停/跳出函数），让 LLM 把分析结论"沉淀"为 x64dbg 原生的 label/comment（跨会话持久化），并把"程序结构"作为高层次工具暴露（函数表/内存映射/IAT/EAT）。沿用 S3 的 ToolPolicy + 5s confirm + 双相 audit。
+
+### 工具分组（新增 10 个；总 27 → 37）
+
+#### S6-A 调试导航（`ai/tools/debug_navigation_tools.cpp`）
+- `run_continue(wait_for_stop=false, timeout_ms=30000)` — Write+confirm。`Script::Debug::Run()`；默认不阻塞 agent loop（让 LLM 能立刻安排下一步策略）；`wait_for_stop=true` 时调用 `Script::Debug::Wait` 等到 Paused/超时。
+- `pause_debug(timeout_ms=5000)` — Write+confirm。`Script::Debug::Pause()` 后等 Paused，5s 兜底。
+- `step_out(timeout_ms=30000)` — Write+confirm。`Script::Debug::StepOut()` + waitForStop。
+
+#### S6-B/C 沉淀（`ai/tools/annotation_tools.cpp`）
+- `set_label(address, text)` / `set_comment(address, text)` — Write+confirm。**`text=""` 即删除**（不另开 delete_* 工具，减少同义工具对 LLM 决策的噪声）。UTF-8 ≤255 字节。底层是 `Script::Label::Set/Delete` 与 `Script::Comment::Set/Delete`，写入 `.dd64` 数据库，跨会话持久化。
+- `get_label(address)` / `get_comment(address)` — Read。单 VA 查询。
+- `list_labels()` / `list_comments()` — Read。用 `BridgeList<T>` RAII 取 `ListInfo`，免手写 BridgeFree。硬截断 256 KB。
+
+#### S6-D 内存映射（`ai/tools/program_map_tools.cpp` 上半）
+- `get_memory_map()` — Read。`DbgMemMap` 遍历 `MEMPAGE`；每页返回 base/size/state(commit/reserve/free)/type(image/mapped/private)/protect（**RWX 风格人类可读字符串**，如 "RWX"/"R-X"/"---+G"）/info（模块或段名）。protect 不直接抛 PAGE_* 数值给 LLM，便于推理（识别可疑 RWX 私有页等）。返回完毕后 `BridgeFree(mm.page)`，遵守 SDK 约定。
+- `get_page_protect(address)` — Read。`Script::Memory::GetProtect` + GetBase/GetSize；返回 protect 字符串 + 原始 DWORD + 所在页基址/大小。
+- `set_page_protect(address, protect, size)` — Write+confirm。protect 接受 "RW"/"RWX"/"R-X"/"---" 等 RWX 风格字符串；本工具**不支持** PAGE_GUARD/PAGE_NOCACHE/PAGE_WRITECOMBINE 等修饰位（避免 LLM 误用）；size 上限 16 MB。
+
+#### S6-E 程序地图（`ai/tools/program_map_tools.cpp` 下半）
+- `list_functions(module?)` — Read。`Script::Function::GetList`；`module` 是大小写不敏感子串过滤。每条返回 module / rva_start / rva_end / manual / instruction_count。硬截断 256 KB（大程序的全量函数表很大）。
+- `get_module_imports(module)` — Read。`Script::Module::GetImports`，逐条返回 name / undecorated / ordinal / iat_va / iat_rva。LLM 可按 API 类别聚类（crypto / net / file / anti-debug）做 triage。
+- `get_module_exports(module)` — Read。`Script::Module::GetExports`，多了 forwarded(+forward_name) 字段。
+
+### 预设（新增 2 个；总 5 → 7）
+- `annotate-function`：白名单 13 个工具（11 读 + `set_label` + `set_comment`），systemPrompt 强制工作流"分析 → 命名（snake_case ASCII label） → 写注释（中文 ≤80 字）"；先 `list_labels` 避免覆盖更权威的人工标注。
+- `map-program`：白名单 8 个纯读工具（list_modules + memory_map + page_protect + list_functions + imports + exports + list_labels + rag_search）；专门给"新样本初探"用，绝不开任何写工具。
+
+`analyze-function` 同步扩白名单：把 S6 新增的 10 个工具全加进去（保持它作为"全能预设"的定位），总数 = 全 37 工具。
+
+### 设计取舍
+- **`text=""` 表示删除**：早期方案是另开 `delete_label`/`delete_comment`，但同义工具会让 LLM 在"是该 set 空串还是 delete"上犹豫。取消独立 delete 工具后白名单更紧。
+- **run_continue 默认不阻塞**：x64dbg 跑起来可能持续很久，阻塞 agent loop 没意义。LLM 想等 Paused 时显式 `wait_for_event` 或下次工具调用前用 `wait_for_stop=true`。
+- **protect 字符串而非 DWORD**：LLM 对 "RWX" 比 "0x40" 更敏感，几乎不会写错；代价是 set_page_protect 不支持修饰位（暂未发现 agent 场景需要）。
+- **list_functions/labels/comments 截断 256 KB**：远大于默认 64 KB；这些工具天生整批返回，截断后给 LLM 加 module 过滤就够用。
+- **set_page_protect 是 Write+confirm**：改 RWX 可让 IAT/CFG 完整性被破坏，必须 5s 倒计时让用户能取消。
+
+### S6-F 集成
+- `ai/tools/debug_navigation_tools.cpp` / `annotation_tools.cpp` / `program_map_tools.cpp` 新建，分别 `registerDebugNavigationTools` / `registerAnnotationTools` / `registerProgramMapTools`。
+- `builtin_tools.h` 加三个 register 声明；`tool_registry.cpp::registerBuiltinTools` 末尾加三个调用。
+- `src/CMakeLists.txt` PLUGIN_SOURCES 追加三个 .cpp。
+- `kPresetSchemaVersion` 9 → 10；`agent_preset.cpp` 加 `annotate-function` / `map-program` 两预设；`analyze-function` 白名单扩 10。
+
+### S6-G 编译坑
+- `Script::Label::Set` 有 3 参（默认 manual=false）和 4 参（带 temporary）两个重载；只传 3 个时编译报 C2668（"对重载函数的调用不明确"）。修复：显式传第 4 个 `/*temporary=*/false`。`Script::Comment::Set` 只有一个三参重载，无此问题。
+- 文件 mtime 沿用 S5 的 `GetFileAttributesExW` + FILETIME→epoch 偏移方案（虽然 S6 用不到，记一下以防 S7 复用）。
+
+### S6-H 构建
+- 双架构 Release 编译通过，零警告零错误。dp64 / dp32 已就位。
+- 工具总数：26 读 + 3 控制 + 8 写 = **37 工具**。
+- 预设总数：7（含 freeform / analyze-function / who-calls-here / string-api-context / explain-here / **annotate-function** / **map-program**）。
+- Git tag：`s6-done`。

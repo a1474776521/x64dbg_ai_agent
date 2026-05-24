@@ -11,6 +11,7 @@
 #include "bridgemain.h"
 #include "_scriptapi_register.h"
 
+#include "dbg/event_bus.h"
 #include "trace/callstack_tracer.h"
 #include "util/logging.h"
 
@@ -34,15 +35,9 @@ void cbTraceExecute(CBTYPE, void* info)
     TraceRecorder::instance().onTraceExecute(static_cast<uint64_t>(p->cip));
 }
 
-void cbBreakpoint(CBTYPE, void* info)
-{
-    auto* p = reinterpret_cast<PLUG_CB_BREAKPOINT*>(info);
-    if (!p || !p->breakpoint) return;
-    uint64_t addr = static_cast<uint64_t>(p->breakpoint->addr);
-    // 同一 CBTYPE 在 x64dbg 内部被插件后注册者覆盖，因此这里集中分发
-    TraceRecorder::instance().onBreakpoint(addr);
-    CallStackTracer::instance().onBreakpoint(addr);
-}
+// S2-C (2026-05-24)：CB_BREAKPOINT 不再由本文件直接 _plugin_registercallback。
+// 改由 plugin_callbacks 单点注册并发 EventBus::Breakpoint，
+// 我们在 registerCallbacks() 里 EventBus::subscribe 订阅一次。
 
 void cbStartTrace(CBTYPE, void*)  { TraceRecorder::instance().onStartTrace(); }
 void cbStopTrace(CBTYPE, void*)   { TraceRecorder::instance().onStopTrace();  }
@@ -65,23 +60,36 @@ void TraceRecorder::registerCallbacks(int pluginHandle)
 {
     _plugin_registercallback(pluginHandle, CB_TRACEEXECUTE,
                              reinterpret_cast<CBPLUGIN>(cbTraceExecute));
-    _plugin_registercallback(pluginHandle, CB_BREAKPOINT,
-                             reinterpret_cast<CBPLUGIN>(cbBreakpoint));
     _plugin_registercallback(pluginHandle, CB_STARTTRACE,
                              reinterpret_cast<CBPLUGIN>(cbStartTrace));
     _plugin_registercallback(pluginHandle, CB_STOPTRACE,
                              reinterpret_cast<CBPLUGIN>(cbStopTrace));
+
+    // S2-C：通过 EventBus 订阅 Breakpoint；同一份事件还会被 CallStackTracer 订阅
+    if (bpToken_ == 0) {
+        bpToken_ = EventBus::instance().subscribe(
+            DbgEvent::Breakpoint,
+            [](const DbgEventPayload& p) {
+                TraceRecorder::instance().onBreakpoint(p.addr);
+            });
+    }
+
     // CB_STOPDEBUG 不在此注册，由 plugin_callbacks::cbStopDebug 统一分发后调用
     // TraceRecorder::onStopDebug() / CallStackTracer::onStopDebug()。
-    XAI_LOG_INFO("TraceRecorder: callbacks registered");
+    XAI_LOG_INFO("TraceRecorder: callbacks registered (breakpoint via EventBus, token={})",
+                 bpToken_);
 }
 
 void TraceRecorder::unregisterCallbacks(int pluginHandle)
 {
     _plugin_unregistercallback(pluginHandle, CB_TRACEEXECUTE);
-    _plugin_unregistercallback(pluginHandle, CB_BREAKPOINT);
     _plugin_unregistercallback(pluginHandle, CB_STARTTRACE);
     _plugin_unregistercallback(pluginHandle, CB_STOPTRACE);
+
+    if (bpToken_ != 0) {
+        EventBus::instance().unsubscribe(bpToken_);
+        bpToken_ = 0;
+    }
     // CB_STOPDEBUG 同步移除——由 plugin_callbacks::unregisterCallbacks 管理。
 }
 

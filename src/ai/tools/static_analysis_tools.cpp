@@ -14,6 +14,7 @@
 
 #include "ai/tools/builtin_tools.h"
 #include "ai/tools/tool.h"
+#include "ai/tools/tool_args_util.h"
 #include "ai/tools/tool_context.h"
 #include "ai/tools/tool_registry.h"
 
@@ -121,10 +122,14 @@ public:
             return r;
         }
         int maxResults = 64;
-        if (args.contains("max_results") && args["max_results"].is_number_integer()) {
-            maxResults = args["max_results"].get<int>();
+        {
+            std::string err;
+            if (tryGetInt32Hint(args, "max_results", 1, 256, maxResults, err)) {
+                // ok
+            } else if (!err.empty()) {
+                r.ok = false; r.error = "invalid 'max_results': " + err; return r;
+            }
         }
-        maxResults = std::clamp(maxResults, 1, 256);
 
         XREF_INFO info{};
         if (!DbgXrefGet(static_cast<duint>(va), &info)) {
@@ -280,10 +285,14 @@ public:
             return r;
         }
         int maxResults = 32;
-        if (args.contains("max_results") && args["max_results"].is_number_integer()) {
-            maxResults = args["max_results"].get<int>();
+        {
+            std::string err;
+            if (tryGetInt32Hint(args, "max_results", 1, 128, maxResults, err)) {
+                // ok
+            } else if (!err.empty()) {
+                r.ok = false; r.error = "invalid 'max_results': " + err; return r;
+            }
         }
-        maxResults = std::clamp(maxResults, 1, 128);
 
         duint start = 0, size = 0;
         std::string scopeDesc;

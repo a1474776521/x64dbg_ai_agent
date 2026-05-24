@@ -14,6 +14,7 @@
 
 #include "ai/tools/builtin_tools.h"
 #include "ai/tools/tool.h"
+#include "ai/tools/tool_args_util.h"
 #include "ai/tools/tool_context.h"
 #include "ai/tools/tool_registry.h"
 
@@ -113,10 +114,14 @@ public:
             return r;
         }
         int maxFrames = 64;
-        if (args.contains("max_frames") && args["max_frames"].is_number_integer()) {
-            maxFrames = args["max_frames"].get<int>();
+        {
+            std::string err;
+            if (tryGetInt32Hint(args, "max_frames", 1, 128, maxFrames, err)) {
+                // ok, maxFrames updated
+            } else if (!err.empty()) {
+                r.ok = false; r.error = "invalid 'max_frames': " + err; return r;
+            }
         }
-        maxFrames = std::clamp(maxFrames, 1, 128);
 
         DBGCALLSTACK cs{};
         fns->GetCallStack(&cs);
@@ -214,15 +219,19 @@ public:
             hasTarget = parseUInt64(args["target_va"], targetVa);
         }
         std::uint64_t sinceSeq = 0;
-        if (args.contains("since_seq") && args["since_seq"].is_number_integer()) {
-            auto v = args["since_seq"].get<std::int64_t>();
-            if (v > 0) sinceSeq = static_cast<std::uint64_t>(v);
+        if (args.contains("since_seq")) {
+            // since_seq 用 parseUInt64 已能接受 number/十进制/0x 三种形态
+            (void)parseUInt64(args["since_seq"], sinceSeq);
         }
         int limit = 64;
-        if (args.contains("limit") && args["limit"].is_number_integer()) {
-            limit = args["limit"].get<int>();
+        {
+            std::string err;
+            if (tryGetInt32Hint(args, "limit", 1, 256, limit, err)) {
+                // ok
+            } else if (!err.empty()) {
+                r.ok = false; r.error = "invalid 'limit': " + err; return r;
+            }
         }
-        limit = std::clamp(limit, 1, 256);
 
         nlohmann::json arr = nlohmann::json::array();
         int matched = 0;
@@ -307,10 +316,14 @@ public:
             return r;
         }
         int maxResults = 32;
-        if (args.contains("max_results") && args["max_results"].is_number_integer()) {
-            maxResults = args["max_results"].get<int>();
+        {
+            std::string err;
+            if (tryGetInt32Hint(args, "max_results", 1, 128, maxResults, err)) {
+                // ok
+            } else if (!err.empty()) {
+                r.ok = false; r.error = "invalid 'max_results': " + err; return r;
+            }
         }
-        maxResults = std::clamp(maxResults, 1, 128);
 
         // 直接调 ApiScanner，再 client-side 按名过滤
         auto hits = ApiScanner::scan(/*maxXrefsPerApi=*/16);
@@ -403,10 +416,14 @@ public:
             return r;
         }
         int topK = 4;
-        if (args.contains("top_k") && args["top_k"].is_number_integer()) {
-            topK = args["top_k"].get<int>();
+        {
+            std::string err;
+            if (tryGetInt32Hint(args, "top_k", 1, 16, topK, err)) {
+                // ok
+            } else if (!err.empty()) {
+                r.ok = false; r.error = "invalid 'top_k': " + err; return r;
+            }
         }
-        topK = std::clamp(topK, 1, 16);
 
         auto emb = EmbeddingClient::instance().embed(query);
         if (emb.empty()) {

@@ -124,6 +124,9 @@ private:
     std::size_t             notifyAccum_    = 0;
 
     StateFn                 stateNotify_;
+
+    // S2-C：EventBus Breakpoint 订阅 token；0 表示未订阅
+    std::uint64_t           bpToken_ = 0;
 };
 
 }  // namespace x64ai

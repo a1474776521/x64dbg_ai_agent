@@ -155,7 +155,7 @@ std::vector<AgentPreset> defaultPresets()
             "get_disasm","read_memory","read_string","get_registers","list_modules",
             "find_xrefs_to","get_function_range","search_pattern",
             "get_callstack","trace_query","locate_api_callers","rag_search",
-            "eval_expression","list_breakpoints"
+            "eval_expression","list_breakpoints","wait_for_event"
         };
         v.push_back(std::move(p));
     }

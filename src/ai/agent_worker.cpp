@@ -48,6 +48,7 @@ void AgentWorker::start(AgentRunRequest req)
         ctx.sessionStore   = store ? reinterpret_cast<void*>(store.get()) : nullptr;
         ctx.targetSha      = ProjectContext::instance().projectId();
         ctx.debuggerActive = DbgIsDebugging();
+        ctx.cancelFlag     = cancel.get();  // S2-D：让工具内阻塞循环能响应用户取消
 
         AgentRunCallbacks cb;
         cb.onAssistantDelta = [self](std::string_view d) {

@@ -542,3 +542,53 @@ x64dbg SDK 的 `_plugin_registercallback` 对同 `(plugin, type)` 后注册者�
 - Git tag：`s1-done`。
 
 > 关于 P2 体验改进 K-17 残余项：`dynamic_context_tools.cpp` 的 `max_frames`、`limit`、`top_k`，以及 `static_analysis_tools.cpp` 的 `max_results`，目前 `is_number_integer()` 严格但默认值兜底（字符串只是不生效），不构成 bug，留 S2 顺手统一为 `parseInt32Lenient`。
+
+---
+
+## S2：调试器事件总线 + wait_for_event（2026-05-24）
+
+> 触发：审查报告 §5 P0 T-06；现状 cbBreakpoint 单点注册导致 trace_recorder/callstack_tracer 抢占；agent 无法在 step/continue 后阻塞等下一次中断，只能盲目重试。
+
+### S2-A `dbg/event_bus.{h,cpp}`
+- 新建 `EventBus` 单例。`enum class DbgEvent { Breakpoint, Paused, Resumed, Stepped, DebugStarted, DebugStopped }`。
+- API：`subscribe(ev, handler)→Token` / `unsubscribe(Token)` / `waitOnce(ev, timeout, &payload, cancelFlag)` / `publish(ev, payload)` / `cancelAllWaits()`。
+- 关键设计：
+  - `publish`：把 handler 列表拷贝到栈上再释放锁触发，允许 handler 内部 sub/unsubscribe 不死锁。
+  - `waitOnce`：condition_variable + 50ms 切片轮询 `cancelFlag`，粒度足够 agent 用且能秒级响应取消。
+  - handler 同步在调试线程跑，约束"短小不嵌套 SDK 命令"（写在头文件注释里）。
+
+### S2-B `plugin/plugin_callbacks.cpp`
+- 统一注册 7 个 SDK 回调（INITDEBUG/STOPDEBUG/MENUENTRY/BREAKPOINT/PAUSEDEBUG/RESUMEDEBUG/STEPPED），4 类调试事件通过 `EventBus::publish` 单源对外。
+- `cbInitDebug`/`cbStopDebug` 同步发 DebugStarted/DebugStopped，并在 stop 时 `cancelAllWaits` 防止 agent 工具线程一直卡到 timeout。
+- 新增 `unregisterCallbacks` 对称卸载。
+
+### S2-C 老消费者迁移
+- `trace_recorder.cpp` 删除 cbBreakpoint 自注册，改 `EventBus::subscribe(Breakpoint, ...)`；`trace_recorder.h` 加 `bpToken_{0}` 字段记录订阅。
+- `callstack_tracer.cpp` 没有 registerCallbacks（之前被 trace_recorder 顺手叫），现在由 plugin_callbacks 直接 `EventBus::subscribe(Breakpoint, [](p){ CallStackTracer::instance().onBreakpoint(p.addr); })`，消除"两个消费者要竞争同一个 CB_BREAKPOINT 回调，后注册者覆盖前者"的隐患。
+
+### S2-D `wait_for_event` 工具 + ToolContext.cancelFlag
+- 新建 `src/ai/tools/debug_control_tools.cpp`，`wait_for_event` 接受 `event ∈ {breakpoint, paused, stepped, any}` + `timeout_ms ∈ [100, 60000]`，默认 5000ms。
+- "any" 实现：三路 50ms 切片轮询 Breakpoint/Paused/Stepped。
+- 失败分流：`reason ∈ {timeout, cancelled, debug_stopped}`，agent 能根据原因决定继续等还是放弃。
+- 工具运行在 AgentWorker 的 `QtConcurrent::run` 后台线程里，调用 `Script::Debug::Wait` 类的阻塞 API 不会卡 GUI。
+- **顺带修一个隐性缺陷**：`ToolContext` 加 `const std::atomic<bool>* cancelFlag`；`AgentWorker` 把它指向 worker 的 `cancel` 标志。这样所有"工具内部有循环等待"的实现都能 1s 内响应用户取消，不再被超时压垮（实际 wait_for_event 最大 60s）。
+
+### S2-E `parseInt32Lenient` 提到 `tool_args_util.h`
+- 新建头文件 `src/ai/tools/tool_args_util.h`，inline 暴露 `parseInt32Lenient` + `tryGetInt32Hint`（已存在性 + 可解析性双检查）。
+- 删除 `basic_read_tools.cpp` 内的私有副本，改 `#include`；`dynamic_context_tools.cpp` 把 max_frames / limit / max_results / top_k 4 个 hint 全部换成 `tryGetInt32Hint`（同时返回友好错误而非默默使用默认值）；`static_analysis_tools.cpp` 两个 max_results 同步迁移。
+- 解决 K-17 残余：LLM 把 "32" / "0x20" 当字符串传过来不再被悄悄忽略默认 64，agent 减少一轮无效重试。
+
+### S2-F 预设升级
+- `kPresetSchemaVersion` 5 → 6，触发 readonly preset 覆盖逻辑，让现存用户启动即吃到 wait_for_event。
+- 通用预设 `analyze-function` 白名单追加 `wait_for_event`；其他 3 个静态分析预设刻意不开（agent 在纯静态场景不应 hang）。
+
+### S2-G 构建 / 文档 / tag
+- `src/CMakeLists.txt` PLUGIN_SOURCES 加 `dbg/event_bus.{h,cpp}` / `ai/tools/tool_args_util.h` / `ai/tools/debug_control_tools.cpp`。
+- 双架构 Release 编译通过（`build-x64\bin\Release\x64dbg_ai_plugin.dp64` / `build-x86\...\dp32`）。
+- Agent 实测留 S3 之前的端到端验证。
+- Git tag：`s2-done`。
+
+### 副作用与下一步
+- `EventBus::waitOnce` 的 `cancelFlag` 参数类型 `std::atomic<bool>*` → `const std::atomic<bool>*`（只 load，不改），匹配 ToolContext 的 const 指针；已同步头/实现两端。
+- S3 起进入 ToolPolicy + 写工具五件套（T-01..T-05），write_audit.log，5s 倒计时 confirm，run_dbg_command 白名单。
+

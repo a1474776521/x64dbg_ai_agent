@@ -15,6 +15,7 @@
 //   - 不写内存、不改寄存器、不动断点
 #include "ai/tools/builtin_tools.h"
 #include "ai/tools/tool.h"
+#include "ai/tools/tool_args_util.h"
 #include "ai/tools/tool_context.h"
 #include "ai/tools/tool_registry.h"
 
@@ -72,56 +73,7 @@ bool parseUInt64(const nlohmann::json& v, std::uint64_t& out)
     return false;
 }
 
-// S0-H1 (2026-05-24)：宽松整数解析，接受
-//   - JSON number（123、123.0 截断、unsigned）
-//   - 十进制字符串 "123"
-//   - 十六进制字符串 "0x100"
-// 范围 clamp 到 [lo, hi]。返回 false 时 outErr 填友好原因（包含 lo/hi）。
-// LLM 频繁把 number 序列化为 string，原先 is_number_integer() 严格校验会反复拒绝。
-bool parseInt32Lenient(const nlohmann::json& v, int lo, int hi,
-                       int& out, std::string& outErr)
-{
-    long long n = 0;
-    bool ok = false;
-    if (v.is_number_integer()) {
-        n  = v.get<long long>();
-        ok = true;
-    } else if (v.is_number_float()) {
-        n  = static_cast<long long>(v.get<double>());
-        ok = true;
-    } else if (v.is_string()) {
-        const std::string s = v.get<std::string>();
-        if (!s.empty()) {
-            try {
-                std::size_t pos = 0;
-                if (s.size() > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
-                    n = std::stoll(s.substr(2), &pos, 16);
-                    ok = (pos + 2 == s.size());
-                } else {
-                    n = std::stoll(s, &pos, 0);
-                    ok = (pos == s.size());
-                }
-            } catch (...) {
-                ok = false;
-            }
-        }
-    }
-    if (!ok) {
-        char buf[96];
-        std::snprintf(buf, sizeof(buf),
-                      "expected integer or decimal/hex string in [%d, %d]", lo, hi);
-        outErr = buf;
-        return false;
-    }
-    if (n < lo || n > hi) {
-        char buf[96];
-        std::snprintf(buf, sizeof(buf), "value out of range [%d, %d]", lo, hi);
-        outErr = buf;
-        return false;
-    }
-    out = static_cast<int>(n);
-    return true;
-}
+// S0-H1 / S2-E：parseInt32Lenient 已迁到 ai/tools/tool_args_util.h（共享给所有工具）。
 
 std::string formatHexVa(std::uint64_t va)
 {

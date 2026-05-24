@@ -39,6 +39,7 @@ void ToolRegistry::registerBuiltinTools()
     registerBasicReadTools(*this);
     registerStaticAnalysisTools(*this);
     registerDynamicAndContextTools(*this);
+    registerDebugControlTools(*this);
     XAI_LOG_INFO("ToolRegistry::registerBuiltinTools(): total {} tools", tools_.size());
 }
 

@@ -113,6 +113,14 @@
 - **状态**：S0 修复 `read_memory.size` / `get_disasm.lines`；dynamic_context / static_analysis 的可选 hint 参数走默认值兜底，S1 顺手统一
 - **位置**：`src/ai/tools/basic_read_tools.cpp::parseInt32Lenient`
 
+### K-18：PresetStore::save 偶发 rename "Access is denied"
+- **现象**：S0+S1 烟测冷启动 + schema v3→v5 迁移时，`MoveFileExW(tmp → final, MOVEFILE_REPLACE_EXISTING)` 偶发失败；in-place 覆写 fallback 立刻成功，5 个 preset 正常落盘
+- **复现**：低频，仅在 `agent_presets.json` 升级 schema 时出现一次；正常使用未观察到
+- **疑因**：杀软/Defender 实时扫描 `.tmp` 持锁；或上次进程残留句柄；或 OneDrive 等同步软件抢占 Roaming 目录
+- **影响**：无（fallback 路径已覆盖）
+- **方案**：后续可改为 `ReplaceFileW` + 3 次 50/100/200ms 退避重试；当前 in-place fallback 已可靠
+- **位置**：`src/storage/preset_store.cpp::save`
+
 ---
 
 ## ⚪ 未支持（设计取舍，不是 bug）

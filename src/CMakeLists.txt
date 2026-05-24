@@ -39,16 +39,22 @@ set(PLUGIN_SOURCES
     # ai/tools (M4: agent function calling)
     ai/tools/tool.h
     ai/tools/tool_context.h
+    ai/tools/tool_args_util.h
     ai/tools/tool_registry.cpp
     ai/tools/tool_registry.h
     ai/tools/builtin_tools.h
     ai/tools/basic_read_tools.cpp
     ai/tools/static_analysis_tools.cpp
     ai/tools/dynamic_context_tools.cpp
+    ai/tools/debug_control_tools.cpp
 
     # debugger
     debugger/disasm_context.cpp
     debugger/disasm_context.h
+
+    # dbg (S2-A 调试器事件总线)
+    dbg/event_bus.cpp
+    dbg/event_bus.h
 
     # locator (M3.1 启发式定位器)
     locator/heuristic_hit.h

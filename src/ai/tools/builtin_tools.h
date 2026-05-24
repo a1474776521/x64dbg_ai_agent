@@ -21,4 +21,8 @@ void registerStaticAnalysisTools(ToolRegistry& reg);
 //   get_callstack / trace_query / locate_api_callers / rag_search
 void registerDynamicAndContextTools(ToolRegistry& reg);
 
+// 在 reg 中注册调试控制等待类工具（S2-D）：
+//   wait_for_event
+void registerDebugControlTools(ToolRegistry& reg);
+
 }  // namespace x64ai

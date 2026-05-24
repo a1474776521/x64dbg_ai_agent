@@ -69,6 +69,7 @@ const char* eventToStr(DbgEvent e)
 class WaitForEventTool : public ITool {
 public:
     std::string name() const override { return "wait_for_event"; }
+    ToolCategory category() const override { return ToolCategory::DbgControl; }
     std::string description() const override
     {
         return "Block until the debugger emits a specified event "

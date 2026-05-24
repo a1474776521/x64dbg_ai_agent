@@ -14,6 +14,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "ai/tools/tool_policy.h"
+
 namespace x64ai {
 
 struct ToolContext;  // 见 tool_context.h（前置声明，避免循环依赖）
@@ -40,6 +42,10 @@ public:
 
     // 写类工具需要 UI 确认时返回 true；本批工具全部只读，默认 false
     virtual bool requiresUserConfirmation() const { return false; }
+
+    // S3-A：风险分档。默认 Read；写工具子类必须覆盖为 Write，
+    // 调试控制工具覆盖为 DbgControl。用于 ToolRegistry::dispatch 决定 audit / confirm。
+    virtual ToolCategory category() const { return ToolCategory::Read; }
 
     // 单次返回字节硬上限（基础读取类默认 64KB，否则 8KB）
     virtual std::size_t maxResultBytes() const { return 8 * 1024; }

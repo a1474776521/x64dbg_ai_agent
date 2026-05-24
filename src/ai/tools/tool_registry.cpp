@@ -4,6 +4,7 @@
 #include <chrono>
 
 #include "ai/tools/builtin_tools.h"
+#include "ai/tools/tool_context.h"
 #include "util/logging.h"
 
 namespace x64ai {
@@ -40,6 +41,7 @@ void ToolRegistry::registerBuiltinTools()
     registerStaticAnalysisTools(*this);
     registerDynamicAndContextTools(*this);
     registerDebugControlTools(*this);
+    registerDebugWriteTools(*this);
     XAI_LOG_INFO("ToolRegistry::registerBuiltinTools(): total {} tools", tools_.size());
 }
 
@@ -106,6 +108,83 @@ ToolResult ToolRegistry::dispatch(const std::string& name,
         }
     }
 
+    // S3-D：根据风险分档决定是否 confirm + 写 audit。
+    // Read 工具：直接 invoke。
+    // DbgControl / Write 工具：必须写 audit（开始 + 结束各一条），
+    //                          Write 还要先弹 confirm（除非 requiresUserConfirmation()==false 显式豁免）。
+    const ToolCategory cat       = tool.category();
+    const bool         isWrite   = (cat == ToolCategory::Write);
+    const bool         isControl = (cat == ToolCategory::DbgControl);
+    const bool         needAudit = isWrite || isControl;
+    const bool         needConfirm = isWrite && tool.requiresUserConfirmation();
+
+    if (needConfirm) {
+        if (!ctx.confirmCallback) {
+            r.ok = false;
+            r.error = "write tool requires user confirmation but no UI is attached";
+            XAI_LOG_WARN("ToolRegistry::dispatch '{}': no confirmCallback; deny", name);
+            // 仍要落 audit
+            nlohmann::json a = {
+                {"ts",     std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::system_clock::now().time_since_epoch()).count()},
+                {"tool",   name},
+                {"category", toolCategoryName(cat)},
+                {"args",   args},
+                {"phase",  "denied_no_ui"},
+                {"sha",    ctx.targetSha},
+                {"session", ctx.sessionId},
+            };
+            try { auditLog()->info(a.dump()); } catch (...) {}
+            return r;
+        }
+        // 摘要：取工具的 description() 前一行 + 关键参数提示
+        std::string summary = tool.description();
+        if (auto nl = summary.find('\n'); nl != std::string::npos) summary.resize(nl);
+        if (summary.size() > 160) summary.resize(160);
+
+        std::string argsPretty;
+        try { argsPretty = args.dump(2); } catch (...) { argsPretty = "(dump failed)"; }
+
+        const bool allowed = ctx.confirmCallback(name, summary, argsPretty);
+
+        // 不管 allow / deny 都先记 audit
+        try {
+            nlohmann::json a = {
+                {"ts",     std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::system_clock::now().time_since_epoch()).count()},
+                {"tool",   name},
+                {"category", toolCategoryName(cat)},
+                {"args",   args},
+                {"phase",  allowed ? "confirmed" : "denied_by_user"},
+                {"sha",    ctx.targetSha},
+                {"session", ctx.sessionId},
+            };
+            auditLog()->info(a.dump());
+        } catch (...) {}
+
+        if (!allowed) {
+            r.ok = false;
+            r.error = "user denied tool execution";
+            XAI_LOG_INFO("tool '{}' denied by user", name);
+            return r;
+        }
+    } else if (needAudit) {
+        // DbgControl 或 Write-无 confirm：开始前留痕
+        try {
+            nlohmann::json a = {
+                {"ts",     std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::system_clock::now().time_since_epoch()).count()},
+                {"tool",   name},
+                {"category", toolCategoryName(cat)},
+                {"args",   args},
+                {"phase",  "begin"},
+                {"sha",    ctx.targetSha},
+                {"session", ctx.sessionId},
+            };
+            auditLog()->info(a.dump());
+        } catch (...) {}
+    }
+
     // 调用 + 计时
     const auto t0 = std::chrono::steady_clock::now();
     try {
@@ -121,6 +200,27 @@ ToolResult ToolRegistry::dispatch(const std::string& name,
     }
     const auto t1 = std::chrono::steady_clock::now();
     r.elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0);
+
+    // S3-D：写/控制工具结束后再落一条 audit（带 ok + error/data 摘要）
+    if (needAudit) {
+        try {
+            std::string dataSnippet;
+            try { dataSnippet = r.data.dump(); } catch (...) { dataSnippet = "(dump failed)"; }
+            if (dataSnippet.size() > 512) dataSnippet.resize(512);
+            nlohmann::json a = {
+                {"ts",     std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::system_clock::now().time_since_epoch()).count()},
+                {"tool",   name},
+                {"category", toolCategoryName(cat)},
+                {"phase",  "end"},
+                {"ok",     r.ok},
+                {"error",  r.error},
+                {"data_snippet", dataSnippet},
+                {"elapsed_ms", r.elapsed.count()},
+            };
+            auditLog()->info(a.dump());
+        } catch (...) {}
+    }
 
     // 大小截断（粗略：按 dump 后的 string size）
     if (r.ok) {

@@ -25,4 +25,9 @@ void registerDynamicAndContextTools(ToolRegistry& reg);
 //   wait_for_event
 void registerDebugControlTools(ToolRegistry& reg);
 
+// 在 reg 中注册写工具（S3-E/F/G）：
+//   set_breakpoint / remove_breakpoint / step_in / step_over / run_until / run_dbg_command
+// 全部 requiresUserConfirmation()==true + category()==Write
+void registerDebugWriteTools(ToolRegistry& reg);
+
 }  // namespace x64ai

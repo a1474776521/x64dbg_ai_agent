@@ -15,6 +15,10 @@ void shutdownLogging();
 // 取全局 logger
 std::shared_ptr<spdlog::logger> log();
 
+// S3-B：写工具审计日志（独立文件 write_audit.log）。
+// 每条 = JSON one-liner（无 spdlog 装饰），便于离线 grep / jq 分析。
+std::shared_ptr<spdlog::logger> auditLog();
+
 }  // namespace x64ai
 
 #define XAI_LOG_TRACE(...) ::x64ai::log()->trace(__VA_ARGS__)

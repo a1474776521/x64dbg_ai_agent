@@ -592,3 +592,61 @@ x64dbg SDK 的 `_plugin_registercallback` 对同 `(plugin, type)` 后注册者�
 - `EventBus::waitOnce` 的 `cancelFlag` 参数类型 `std::atomic<bool>*` → `const std::atomic<bool>*`（只 load，不改），匹配 ToolContext 的 const 指针；已同步头/实现两端。
 - S3 起进入 ToolPolicy + 写工具五件套（T-01..T-05），write_audit.log，5s 倒计时 confirm，run_dbg_command 白名单。
 
+---
+
+## S3：写工具五件套 + ToolPolicy + 5s confirm + write_audit.log（2026-05-24）
+
+> 目标：让 agent 真正能"驱动调试器"——下断点 / 单步 / 跑到指定地址 / 通用命令，但每次写操作都过用户 5s 倒计时确认，并落独立审计日志。
+
+### S3-A `ai/tools/tool_policy.h`
+- 新建 `enum class ToolCategory { Read, DbgControl, Write }`。
+- `ITool::category()` 加默认实现 `return ToolCategory::Read`，子类按需覆盖。
+- 配套 `toolCategoryName()` 让 audit 日志可读。
+
+### S3-B `util/logging.{h,cpp}`
+- 加 `auditLog()` 全局函数；初始化时建独立 spdlog logger `x64dbg-ai-audit`，sink 单独的 `write_audit.log`（4 MB × 10 轮转），pattern `%v`（无任何装饰，每条直接是完整 JSON）。
+- `flush_on(info)` 保证写工具行为即时落盘，进程崩了也不丢。
+- `shutdownLogging()` 同步关闭。
+
+### S3-C `ui/tool_confirm_dialog.{h,cpp}`
+- `ToolConfirmDialog`：模态 QDialog，5 秒倒计时；"允许"按钮初始 disabled，文本 `允许 (Ns)`，QTimer 每秒 -1，归零后启用并去掉计数。
+- `denyButton_->setDefault(true)` → ESC/Enter 默认拒绝；安全为先。
+- 静态 `confirmFromBackground(toolName, summary, argsJson, sec)`：工具线程入口。`QThread::currentThread() != app->thread()` 时用 `QMetaObject::invokeMethod(app, lambda, BlockingQueuedConnection)` 切到 GUI 线程并阻塞等返回。无 `QApplication` 时安全 deny。
+- 参数 JSON 在等宽字体 dark 主题块内展示，高级用户可审。
+
+### S3-D `ToolRegistry::dispatch` 接入 policy
+- 新增 `ToolContext::confirmCallback`（`std::function<bool(name,summary,argsPretty)>`），AgentWorker 在 ctx 构造时塞入 `ToolConfirmDialog::confirmFromBackground` 的 lambda。
+- dispatch 在 invoke 前判 `category()`：
+  - **Read**：原路通过。
+  - **DbgControl**：写 audit `phase=begin` → invoke → 写 `phase=end {ok, error, data_snippet, elapsed_ms}`。不弹 confirm（agent 主动等下次中断是合理行为，弹窗反而打断）。
+  - **Write**：调 `confirmCallback`。无 callback → 直接 deny + 写 `phase=denied_no_ui`。confirmed → 写 `phase=confirmed` 再 invoke 再写 end；denied → 写 `phase=denied_by_user`。
+- JSON 字段：`ts(ms epoch) / tool / category / args / phase / sha / session [/ ok / error / data_snippet / elapsed_ms]`，一行一条便于 grep/jq。
+
+### S3-E/F/G `debug_write_tools.cpp` 五件套 + 命令逃生口
+- `set_breakpoint(addr, type=software|hardware)` → `Script::Debug::SetBreakpoint` / `SetHardwareBreakpoint`。
+- `remove_breakpoint(addr)` → 软硬都试一遍，返回 `{software_removed, hardware_removed}`。
+- `step_in(timeout_ms=30000)` → `DbgCmdExecDirect("StepInto")` + `waitForStop`（私有 helper：50ms 切片三路轮询 Paused/Breakpoint/Stepped，响应 cancelFlag 和 `!DbgIsDebugging()`）。
+- `step_over(timeout_ms=30000)` → `StepOver` + waitForStop。
+- `run_until(addr, timeout_ms=30000)` → `DbgCmdExecDirect("bp 0x.., ss")` 装 one-shot + `run` + waitForStop + 兜底 `DeleteBreakpoint`（singleshoot 命中后 x64dbg 也会清，但 timeout 路径必须自己清）。
+- `run_dbg_command(command)` → 首 token（按空白 / 逗号切）转小写后查 15 token 白名单：
+  - 断点：`bp/bpc/bphwc/bpd/bpe`
+  - 控制：`run/stepinto/stepover/stepout/pause`
+  - 数据读：`db/dw/dd/dq`
+  非白名单直接 deny + warn。允许后 `DbgCmdExecDirect` 同步执行；返回 `{command, executed}`。
+- 所有工具 `category()==Write` + `requiresUserConfirmation()==true`。`wait_for_event` 提级为 `DbgControl`（不要 confirm 但要 audit）。
+
+### S3-H 预设升级
+- `kPresetSchemaVersion` 6 → 7，触发现有 readonly preset 自动覆盖。
+- 通用预设 `analyze-function` 白名单追加 6 个新工具；其他 3 个静态分析预设保持精简，不开写工具。
+
+### S3-I 构建 / 文档 / tag
+- `src/CMakeLists.txt` 加 `ai/tools/tool_policy.h` / `ai/tools/debug_write_tools.cpp` / `ui/tool_confirm_dialog.{h,cpp}`。
+- 双架构 Release 编译通过，零警告（dp64 / dp32 产物已就位）。
+- Git tag：`s3-done`。
+
+### 设计取舍记录
+- **autoApprove 字段没做**：preset.json 加白名单跳 confirm 风险大，等用户反馈再评估。当前所有写工具一律 5s 弹窗，不可绕过。
+- **run_until 的 one-shot 走命令而非 Script API**：因为 `Script::Debug::SetBreakpoint` 不支持 singleshoot 标志；DbgCmdExecDirect 同步发 `bp addr, ss` 是公开且稳定的实现路径。
+- **wait_for_event 不弹 confirm**：它本质是只读（agent 等下次中断信号），但占用执行流且涉及 cancelFlag 通信，需要 audit 追踪 agent 是否合理使用（不要被 LLM 当 polling 用）。
+- **审计 sink 单独 logger 而非给 plugin.log 加 tag**：JSON 一行一条要求 pattern 是裸 `%v`，与 plugin.log 的 `[ts] [tid] [lvl] %v` 冲突；分离最清爽。
+

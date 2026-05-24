@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,14 @@ struct ToolContext {
     // 应周期性轮询此标志并尽快返回。可为 nullptr（旧调用路径）。
     // 不接管所有权——指针生命周期由 AgentWorker 的 shared_ptr<atomic<bool>> 保证。
     const std::atomic<bool>* cancelFlag = nullptr;
+
+    // S3-D：写工具确认回调。由 AgentWorker 注入；
+    // 签名 (toolName, summary, prettyArgsJson) → bool（true=允许）。
+    // ToolRegistry::dispatch 在判定 needConfirm=true 后调用本回调；
+    // 工具实现本身不需要感知。可为空（视为拒绝所有写工具）。
+    std::function<bool(const std::string& toolName,
+                       const std::string& summary,
+                       const std::string& argsPretty)> confirmCallback;
 
     // 调用者可选：写一条 audit 日志（plugin.log），失败/截断时附加上下文。
     // 工具内部一般不直接用，由 ToolRegistry::dispatch 统一记录。

@@ -5,6 +5,7 @@
 #include "ai/agent_loop.h"
 #include "storage/project_context.h"
 #include "storage/session_store.h"
+#include "ui/tool_confirm_dialog.h"
 #include "util/logging.h"
 
 #include <bridgemain.h>
@@ -49,6 +50,18 @@ void AgentWorker::start(AgentRunRequest req)
         ctx.targetSha      = ProjectContext::instance().projectId();
         ctx.debuggerActive = DbgIsDebugging();
         ctx.cancelFlag     = cancel.get();  // S2-D：让工具内阻塞循环能响应用户取消
+
+        // S3-D：注入跨线程模态 confirm 回调。dispatch 在工具线程调用本 lambda 时，
+        // ToolConfirmDialog 内部会 BlockingQueuedConnection 切回 GUI 线程。
+        ctx.confirmCallback = [](const std::string& toolName,
+                                  const std::string& summary,
+                                  const std::string& argsPretty) -> bool {
+            return ToolConfirmDialog::confirmFromBackground(
+                QString::fromStdString(toolName),
+                QString::fromStdString(summary),
+                QString::fromStdString(argsPretty),
+                /*countdownSec=*/5);
+        };
 
         AgentRunCallbacks cb;
         cb.onAssistantDelta = [self](std::string_view d) {

@@ -40,6 +40,7 @@ set(PLUGIN_SOURCES
     ai/tools/tool.h
     ai/tools/tool_context.h
     ai/tools/tool_args_util.h
+    ai/tools/tool_policy.h
     ai/tools/tool_registry.cpp
     ai/tools/tool_registry.h
     ai/tools/builtin_tools.h
@@ -47,6 +48,7 @@ set(PLUGIN_SOURCES
     ai/tools/static_analysis_tools.cpp
     ai/tools/dynamic_context_tools.cpp
     ai/tools/debug_control_tools.cpp
+    ai/tools/debug_write_tools.cpp
 
     # debugger
     debugger/disasm_context.cpp
@@ -106,6 +108,8 @@ set(PLUGIN_SOURCES
     ui/trace_dialog.h
     ui/api_key_dialog.cpp
     ui/api_key_dialog.h
+    ui/tool_confirm_dialog.cpp
+    ui/tool_confirm_dialog.h
 
     # util
     util/logging.cpp

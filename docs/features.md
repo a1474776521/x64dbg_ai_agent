@@ -238,7 +238,7 @@
 | `%APPDATA%\x64dbg-ai-plugin\logs\plugin.log` | spdlog 文件输出 | `XAI_LOG_*` 宏 |
 | `%APPDATA%\x64dbg-ai-plugin\logs\write_audit.log` | S3 写工具审计（JSON 一行一条；rotating 4 MB×10） | `util/logging.cpp::auditLog` |
 | `%APPDATA%\x64dbg-ai-plugin\projects\<sha>.db` | 会话 + RAG 数据库 | `SessionStore` |
-| `%APPDATA%\x64dbg-ai-plugin\agent_presets.json` | Agent 预设（schemaVersion=11，S7 后 analyze-function 含全 49 个工具；新增 crack-license/anti-anti-debug/cfg-explorer/patch-and-verify/trace-input 共 5 个新预设，连同 S6 的 annotate-function/map-program，预设总数=12） | `PresetStore` |
+| `%APPDATA%\x64dbg-ai-plugin\agent_presets.json` | Agent 预设（schemaVersion=12，S8 后 analyze-function 含全 63 个工具；S8 新增 malware-triage / unpack-helper 两个独立预设；anti-anti-debug 同步扩入 5 个被动诊断工具；预设总数=14） | `PresetStore` |
 | `%APPDATA%\x64dbg-ai-plugin\scripts\` | S5 agent 脚本目录；`list_scripts` / `load_script` / `run_script_file` 相对路径基准 | `util/paths.cpp::pluginScriptsDir` |
 | `%APPDATA%\x64dbg-ai-plugin\secrets\*.bin` | DPAPI 加密的 token/key | `SecretStore` |
 
@@ -285,7 +285,7 @@
 
 LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什么、再算什么、何时回答"。
 
-### 工具清单（S7 后 49 个：29 个只读 + 5 个控制 + 15 个写）
+### 工具清单（S8 后 63 个：39 个只读 + 5 个控制 + 19 个写）
 
 | 类别 | 工具 | 说明 |
 |---|---|---|
@@ -339,6 +339,20 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 | **S7-H 模板**（Read） | `format_with_dbg(template)` | `DbgFunctions()->StringFormatInline`；支持 `{x:[rax+8]}` / `{s:[rcx]}`；4 KB 输出缓冲 |
 | **S7-I GUI 焦点**（DbgControl，无副作用、无 confirm） | `gui_focus_disasm(address)` | `GuiDisasmAt(addr, addr)`；滚动反汇编视图 |
 |  | `gui_focus_dump(address, index=1)` | index=1 走 `GuiDumpAt`；2–5 走 `GuiDumpAtN(va, index-1)` |
+| **S8-A 反调试洞察**（Read，被动诊断不会被检测） | `list_threads()` | `DbgGetThreadList` → `THREADLIST`（list.list 需手动 `BridgeFree`）；输出 TID/CIP/SuspendCount/Priority/WaitReason/UserTime/KernelTime/Cycles；priority/waitReason 仅翻译常见枚举，其余 raw 数值 |
+|  | `get_peb_address(thread_id?, read_bytes?)` | `DbgGetPebAddress`；可选预读前 N 字节（最多 4 KB） |
+|  | `get_anti_debug_flags()` | 一键诊断 PEB.BeingDebugged / NtGlobalFlag / ProcessHeap；按 `sizeof(duint)` 切偏移（x86 +0x68/+0x18，x64 +0xBC/+0x30）；HeapFlags 不硬编码（版本差异大），返回偏移引导 LLM 用 read_memory 探 |
+| **S8-B 取证**（Read） | `enum_handles(type_filter?)` | 两阶段 `EnumHandles` + `GetHandleName`（typeBuf/nameBuf 各 512）；type_filter CI 子串过滤 |
+|  | `enum_windows()` | `WINDOW_INFO`：handle/parent/threadId/style/styleEx/wndProc/enabled/position/title[512]/class[512] |
+|  | `enum_tcp_connections()` | `TCPCONNECTIONINFO`：local/remote IPv4 + port + 状态字串 |
+| **S8-C SEH**（Read） | `get_seh_chain()` | `GetSEHChain` → `DBGSEHCHAIN`，records 需 `BridgeFree`；x86 走链表；x64 走 `if constexpr` 返回 total=0 并附 hint 引导 .pdata/RtlLookupFunctionEntry |
+| **S8-D 注入 + 栈**（Write+confirm；stack_peek 是 Read） | `remote_alloc(addr?, size)` | `Script::Memory::RemoteAlloc`；addr=0 让系统选；SDK 内固定 PAGE_EXECUTE_READWRITE；64MB 上限 |
+|  | `remote_free(addr)` | `Script::Memory::RemoteFree`；只接受 RemoteAlloc 返回的基址 |
+|  | `stack_push(value)` | `Script::Stack::Push`；ESP/RSP -= ptr_size；返回压栈前的 top + 新 SP（来自 `GetCSP`） |
+|  | `stack_peek(offset=0)` | `Script::Stack::Peek`；**offset 是 pointer-sized SLOTS 不是字节**（坑！description 已标红） |
+| **S8-E trace / 错误码 / 函数注册** | `get_trace_record_info(address)` (Read) | 合并 `GetTraceRecordHitCount` + `GetTraceRecordByteType` + 页对齐后的 `GetTraceRecordType`；hit_count=0 + record_type=None 时附 hint |
+|  | `translate_error_code(code)` (Read) | 0xC0000005 → EXCEPTION_ACCESS_VIOLATION；`std::call_once` lazy 灌入 `unordered_map<duint,string>`（`EnumErrorCodes` + `EnumExceptions`），后续 O(1)；32-bit 错误码尝试低 32 位回退匹配 |
+|  | `add_function(start, end, manual=true)` (Write+confirm) | `Script::Function::Add`；**end 是最后一条指令 VA inclusive，不是 end+1**；manual=true 防分析器覆盖 |
 
 ### ToolPolicy 三档（S3）
 
@@ -433,14 +447,14 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 
 ```json
 {
-  "schemaVersion": 11,
+  "schemaVersion": 12,
   "presets": [{ "id": "...", "name": "...", "systemPrompt": "...", "userTemplate": "...",
                 "enabledTools": ["..."], "maxIter": 20, "temperature": 0.2,
                 "provider": "deepseek", "model": "", "showInContextMenu": true, "readonly": true }]
 }
 ```
 
-- 启动时 `diskSchema < kPresetSchemaVersion(=11)`：用新版 defaults 覆盖所有 readonly；用户预设保留
+- 启动时 `diskSchema < kPresetSchemaVersion(=12)`：用新版 defaults 覆盖所有 readonly；用户预设保留
 - 保存：`rename(.tmp → final)`；rename Access Denied（avast/Defender 抢锁）时 3 次重试 50 ms 间隔 + 原地 ofstream 覆写 fallback
 
 ---

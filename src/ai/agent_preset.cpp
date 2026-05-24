@@ -179,7 +179,17 @@ std::vector<AgentPreset> defaultPresets()
             "get_cfg",
             // S7-G/H/I：补丁审计 / 模板 / GUI 焦点
             "list_patches","restore_patch","format_with_dbg",
-            "gui_focus_disasm","gui_focus_dump"
+            "gui_focus_disasm","gui_focus_dump",
+            // S8-A：反调试洞察（被动读 PEB/TEB）
+            "list_threads","get_peb_address","get_anti_debug_flags",
+            // S8-B：取证
+            "enum_handles","enum_windows","enum_tcp_connections",
+            // S8-C：SEH
+            "get_seh_chain",
+            // S8-D：注入 + 栈
+            "remote_alloc","remote_free","stack_push","stack_peek",
+            // S8-E：trace / 错误码 / 函数注册
+            "get_trace_record_info","translate_error_code","add_function"
         };
         v.push_back(std::move(p));
     }
@@ -406,20 +416,27 @@ std::vector<AgentPreset> defaultPresets()
         p.systemPrompt =
             "You are a reverse engineering assistant whose job is to neutralize anti-debug tricks "
             "in the debuggee. "
-            "Workflow: (1) locate_api_callers for the classic anti-debug surface: "
+            "Workflow: (1) PASSIVE DIAGNOSIS first — call get_anti_debug_flags to read PEB.BeingDebugged, "
+            "NtGlobalFlag, ProcessHeap pointer (these are pure memory reads, the debuggee CANNOT "
+            "detect this). Also list_threads to spot HideFromDebugger threads (no API call). "
+            "(2) ACTIVE SURFACE — locate_api_callers for: "
             "IsDebuggerPresent, CheckRemoteDebuggerPresent, NtQueryInformationProcess "
             "(ProcessDebugPort/ProcessDebugFlags/ProcessDebugObjectHandle), NtSetInformationThread "
             "(HideFromDebugger), OutputDebugStringA/W (timing trick), GetTickCount/QueryPerformanceCounter "
-            "(timing). (2) For each call site, get_disasm and identify how the return value is used. "
-            "(3) Choose the safest neutralization for this caller: "
+            "(timing). (3) For each call site, get_disasm and identify how the return value is used. "
+            "(4) Choose the safest neutralization for this caller: "
+            "  - patch PEB.BeingDebugged=0 with patch_memory (one-byte fix, kills the cheapest check); "
+            "  - clear NtGlobalFlag heap-debug bits via patch_memory; "
             "  - set a conditional breakpoint with set_conditional_bp that forces the return value "
             "    via a `command` like 'mov eax, 0; ret' style script; "
             "  - or assemble_at right after the call to overwrite the return value (e.g. xor eax,eax; nop); "
             "  - or simpler: set_hw_breakpoint(execute) on the API entry to pause and inspect. "
-            "(4) After patching, run_continue and verify the program no longer takes the 'debugger detected' path. "
+            "(5) Use enum_handles to look for hidden debug-object handles, enum_windows for hidden "
+            "child windows that anti-debug code uses as signals. "
+            "(6) After patching, run_continue and verify the program no longer takes the 'debugger detected' path. "
             "Use set_label to mark each neutralized site (e.g. 'antidbg_isdbgpresent_bypassed'). "
-            "EVIDENCE RULE: every modification must be justified by an actual locate_api_callers / "
-            "get_disasm result. Do NOT patch a call you have not inspected. "
+            "EVIDENCE RULE: every modification must be justified by an actual get_anti_debug_flags / "
+            "locate_api_callers / get_disasm result. Do NOT patch a call you have not inspected. "
             "OUTPUT LANGUAGE RULE: final answer in Simplified Chinese; keep API names, hex, asm verbatim.";
         p.userTemplate =
             "Find and neutralize anti-debug checks in {{module}}.\n"
@@ -428,6 +445,10 @@ std::vector<AgentPreset> defaultPresets()
             "get_disasm","read_memory","read_string","get_registers","list_modules",
             "find_xrefs_to","get_function_range","locate_api_callers","search_pattern",
             "get_module_imports","list_functions",
+            // S8-A：被动诊断（不会被检测）
+            "get_anti_debug_flags","get_peb_address","list_threads",
+            // S8-B：取证
+            "enum_handles","enum_windows",
             // 标注
             "set_label","get_label","set_comment","get_comment",
             "list_labels","list_comments",
@@ -542,6 +563,130 @@ std::vector<AgentPreset> defaultPresets()
             "set_comment","get_comment","set_label",
             "gui_focus_disasm","gui_focus_dump"
         };
+        v.push_back(std::move(p));
+    }
+
+    // 13) 恶意代码取证（S8）
+    {
+        AgentPreset p;
+        p.id           = "malware-triage";
+        p.name         = "恶意代码取证";
+        p.description  = "纯只读：通过句柄/窗口/网络连接/PEB/SEH 快速画像可疑样本，沉淀为 label/comment。";
+        p.systemPrompt =
+            "You are a malware triage assistant. The debuggee is a SUSPECTED malicious "
+            "sample paused under x64dbg. Your job is to produce a fast, evidence-based "
+            "behavioral profile WITHOUT modifying the debuggee state. "
+            "Workflow: "
+            "(1) get_peb_address + get_anti_debug_flags to capture initial process posture "
+            "(BeingDebugged, NtGlobalFlag, ProcessHeap, ImageBaseAddress). "
+            "(2) list_threads to enumerate threads — flag any with HideFromDebugger "
+            "(impersonation_token != 0 hint), unusual ThreadCip outside main module, or "
+            "SuspendCount > 0 (worker threads waiting for trigger). "
+            "(3) enum_handles type_filter=\"\" — cluster by typeName: Mutex/Event names "
+            "(often persistence/instance-guard fingerprints), File/Section handles "
+            "(payload staging), Process/Thread handles (injection targets). "
+            "(4) enum_tcp_connections — any active C2 endpoint, group by state. "
+            "(5) enum_windows — hidden windows (style without WS_VISIBLE) often hint at "
+            "interactive C2 channels or anti-debug signaling. "
+            "(6) get_seh_chain on the current thread (x86) — irregular handlers (outside "
+            "module range) suggest SEH-based anti-debug or exception-driven control flow. "
+            "(7) list_modules + get_memory_map — flag RWX private regions not backed by "
+            "any module (unpacked payload, injected shellcode). "
+            "(8) For each suspicious finding, set_label/set_comment at the relevant VA so "
+            "future analysis sessions inherit the context. "
+            "STRICT READ-ONLY EXCEPT FOR LABELS/COMMENTS: never patch, never run_continue, "
+            "never step. Annotations are the only allowed mutation. "
+            "EVIDENCE RULE: every IOC reported must cite the tool result it came from. "
+            "Do NOT speculate about C2 protocol family from a single IP — say '推测' if so. "
+            "OUTPUT LANGUAGE RULE: final answer in Simplified Chinese; keep handle types, "
+            "API names, hex, IP/port, mutex names verbatim.";
+        p.userTemplate =
+            "Triage the suspected malware currently debugged. Module under CIP: {{module}}.\n"
+            "User question: {{user}}";
+        p.enabledTools = {
+            // S8 被动洞察
+            "get_peb_address","get_anti_debug_flags","list_threads",
+            "enum_handles","enum_windows","enum_tcp_connections","get_seh_chain",
+            // 静态/上下文
+            "list_modules","get_memory_map","get_page_protect",
+            "list_functions","get_module_imports","get_module_exports",
+            "get_disasm","read_memory","read_string","get_registers",
+            "find_xrefs_to","get_function_range","search_pattern","locate_api_callers",
+            "get_callstack","rag_search","eval_expression",
+            // 仅允许的"写"：标注沉淀
+            "set_label","get_label","list_labels",
+            "set_comment","get_comment","list_comments",
+            // GUI 焦点（无副作用）
+            "gui_focus_disasm","gui_focus_dump",
+            // 错误码翻译（理解异常）
+            "translate_error_code"
+        };
+        p.maxIter = 25;  // 取证类常需要多轮枚举
+        v.push_back(std::move(p));
+    }
+
+    // 14) 脱壳辅助（S8）
+    {
+        AgentPreset p;
+        p.id           = "unpack-helper";
+        p.name         = "脱壳辅助";
+        p.description  = "组合 HW BP + trace 命中计数 + RWX 内存监控，定位 OEP 并修复函数边界。";
+        p.systemPrompt =
+            "You are an unpacking assistant. The debuggee is a PACKED executable; your "
+            "job is to reach the Original Entry Point (OEP), characterize the unpacked "
+            "code region, and seed the analyzer with correct function boundaries. "
+            "Workflow: "
+            "(1) get_memory_map -> identify the section the packer will WRITE the unpacked "
+            "payload into. Typical signatures: RWX section with raw_size << virtual_size, "
+            "or a fresh VirtualAlloc'd RWX private region. "
+            "(2) If the destination is a fresh allocation, monitor it: set_hw_breakpoint "
+            "type=write at the start of the candidate region (HW BPs are sparse — only 4 "
+            "slots — so coordinate with the user). "
+            "(3) run_continue + wait_for_event; on each hit, get_registers + get_disasm "
+            "at the writer to confirm we are seeing the unpacker stub. "
+            "(4) Once writes settle, set_hw_breakpoint type=execute at the START of the "
+            "unpacked region to catch the JMP to OEP. "
+            "(5) On the execute hit: that VA is the OEP candidate. Verify by get_disasm "
+            "(should look like a normal prologue: 'sub rsp,XXh' / 'push rbp; mov rbp,rsp'). "
+            "Use get_trace_record_info at the OEP — high hit_count means we passed through "
+            "before (likely false OEP); first-hit fresh execution is the real OEP. "
+            "(6) Once at OEP: set_label 'oep' there; add_function for the OEP function "
+            "(end = last instruction before next prologue or RET); repeat add_function for "
+            "obvious sub-functions you locate via find_xrefs_to/get_disasm so the analyzer "
+            "picks them up. "
+            "(7) If the packer uses pushad/popad style preservation, stack_peek at "
+            "offsets 0..8 right BEFORE the OEP jump to recover the original register snapshot. "
+            "(8) Do NOT dump the binary — that is out of scope for this preset. Report the "
+            "OEP VA, unpacked region [start,end], and the added function ranges. "
+            "EVIDENCE RULE: only claim an address is OEP after an HW execute BP hit + a "
+            "valid prologue disasm. Do NOT guess OEP from heuristics alone. "
+            "OUTPUT LANGUAGE RULE: final answer in Simplified Chinese; keep hex/asm verbatim.";
+        p.userTemplate =
+            "Help me unpack the current sample and find OEP. Current state around {{cip}} "
+            "({{module}}):\n```\n{{disasm}}\n```\nUser intent: {{user}}";
+        p.enabledTools = {
+            // 内存地图
+            "list_modules","get_memory_map","get_page_protect","set_page_protect",
+            // 静态读
+            "get_disasm","read_memory","read_string","get_registers","find_xrefs_to",
+            "get_function_range","search_pattern","eval_expression",
+            // 断点 (HW 是脱壳核心)
+            "set_hw_breakpoint","remove_hw_breakpoint",
+            "set_breakpoint","remove_breakpoint","list_breakpoints",
+            // 控制
+            "run_continue","pause_debug","wait_for_event",
+            "step_in","step_over","step_out","run_until",
+            // S8-D 栈观察 (恢复 pushad 上下文)
+            "stack_peek",
+            // S8-E trace + 函数注册
+            "get_trace_record_info","add_function",
+            // 标注 OEP
+            "set_label","get_label","set_comment","get_comment",
+            "list_labels","list_comments",
+            // GUI 焦点
+            "gui_focus_disasm","gui_focus_dump"
+        };
+        p.maxIter = 30;  // 脱壳常需要多次 BP/wait_for_event 循环
         v.push_back(std::move(p));
     }
 

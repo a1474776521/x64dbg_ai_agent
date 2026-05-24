@@ -854,3 +854,93 @@ x64dbg SDK 的 `_plugin_registercallback` 对同 `(plugin, type)` 后注册者�
 - 预设总数：12（freeform / analyze-function / who-calls-here / string-api-context / explain-here / annotate-function / map-program / **crack-license** / **anti-anti-debug** / **cfg-explorer** / **patch-and-verify** / **trace-input**）。
 - Git tag：`s7-done`。
 
+
+## S8：场景化（反调试洞察 / 取证 / SEH / 注入+栈 / trace+错误码+函数注册）（2026-05-24）
+
+### 范围与最终数字
+
+- 新增工具 **14 个**（A=3 反调试洞察 + B=3 取证 + C=1 SEH + D=4 注入/栈 + E=3 trace/错误码/函数）
+- 工具总数 **49 → 63**（39 读 + 5 控制 + 19 写）
+- 预设 **12 → 14**：新增 `malware-triage` / `unpack-helper`；`anti-anti-debug` 同步扩入 5 个 S8 被动诊断工具
+- `kPresetSchemaVersion` **11 → 12**；`analyze-function` 白名单扩到全 63
+- Git tag：`s8-done`
+
+### S8-A 反调试洞察（`anti_debug_tools.cpp`）
+
+- `list_threads`：`DbgGetThreadList` → `THREADLIST`；返回每线程的 TID/CIP/SuspendCount/Priority/WaitReason/UserTime/KernelTime/Cycles
+  - 关键坑：`THREADLIST.list` 是 C 数组指针，**必须手动 `BridgeFree(list.list)`**（不是 `BridgeList<T>` RAII）
+  - `CurrentThread` 是 0-based 数组索引，不是 TID
+  - Priority/WaitReason 仅翻译常见枚举（`_PriorityIdle`-15..），其余返回 raw 数值避免误导
+- `get_peb_address`：`DbgGetPebAddress`；可选 `thread_id` 用 `DbgGetTebAddress`；可选 `read_bytes` (≤4KB) 同时预读
+- `get_anti_debug_flags`：一键诊断
+  - BeingDebugged @ PEB+0x02
+  - NtGlobalFlag @ PEB + (sizeof(duint)==8 ? 0xBC : 0x68) — **按指针宽度切偏移**
+  - ProcessHeap @ PEB + (8字节 ? 0x30 : 0x18)
+  - HeapFlags **不硬编码**（Win10/11/版本差异大），返回偏移引导 LLM 自己 read_memory 探
+- LLM 优势：纯内存读，**调试器无法被检测**（不调 IsDebuggerPresent 等 API）
+
+### S8-B 取证（`forensic_tools.cpp`）
+
+- `enum_handles`：两阶段 `EnumHandles` 列表 + `GetHandleName(handle, typeBuf, 512, nameBuf, 512)` 补充 type/name
+  - `type_filter` 大小写不敏感子串过滤
+- `enum_windows`：`WINDOW_INFO`：handle/parent/threadId/style/styleEx/wndProc/enabled/position/title[512]/class[512]
+- `enum_tcp_connections`：`TCPCONNECTIONINFO`：local/remote IPv4 + port + 状态字符串
+- 全部用 `BridgeList<T>` RAII（取 `operator&()` 自动 Cleanup + 析构 BridgeFree）
+
+### S8-C SEH（`seh_tool.cpp`）
+
+- `get_seh_chain`：`GetSEHChain` → `DBGSEHCHAIN`；`records` 字段需 `BridgeFree` 手动释
+- x86 走链表；x64 用 `if constexpr (sizeof(duint)==8)` 返回空 + hint 引导 .pdata/RtlLookupFunctionEntry
+- 用 `if constexpr` 替代 `const bool isX64` 规避 C4127 警告（x86 编译时 `isX64` 是编译期常量 false）
+
+### S8-D 注入 + 栈（`injection_stack_tools.cpp`）
+
+- `remote_alloc(addr?, size)`：`Script::Memory::RemoteAlloc`；addr=0 让系统选；**SDK 内部固定 PAGE_EXECUTE_READWRITE**；64MB 上限
+- `remote_free(addr)`：只接受 RemoteAlloc 返回的**基址**，不能传中间页
+- `stack_push(value)`：`Script::Stack::Push`；ESP/RSP -= ptr_size；返回压栈前的 top + 新 SP（来自 `GetCSP`）
+- `stack_peek(offset=0)`：`Script::Stack::Peek`；**offset 单位是 pointer-sized SLOTS 不是字节**（坑！description 标红）
+- 决策：**不暴露 `stack_pop`**。真弹出破坏 ESP 一致性，反向工程几乎用不到；要弹出+恢复让 LLM 用 `stack_peek` + `set_register` 显式做
+- 关键坑：`Script::Register::GetSP()` 返回 **16 位 SP 子寄存器**！整数栈指针必须用 `GetCSP()`（Current Stack Pointer，duint）
+
+### S8-E trace / 错误码 / 函数注册（`trace_error_func_tools.cpp`）
+
+- `get_trace_record_info(address)`：合并 `GetTraceRecordHitCount` + `GetTraceRecordByteType` + 页对齐后的 `GetTraceRecordType`（None/BitExec/ByteWithExec.../WordWithExec...）；hit_count=0 + record_type=None 时附 hint 提醒先 enable trace record
+- `translate_error_code(code)`：0xC0000005 → EXCEPTION_ACCESS_VIOLATION
+  - `std::call_once` lazy 灌入全局 `unordered_map<duint, string>`：`EnumErrorCodes` + `EnumExceptions` 合并
+  - 后续 O(1) 查找；32-bit 错误码尝试低 32 位回退匹配（负数 errcode 兼容）
+  - `CONSTANTINFO.name` 是 dbg 端 `const char*`，立即 `std::string` 拷贝避免悬挂
+- `add_function(start, end, manual=true)`：`Script::Function::Add(start, end, manual)`；**end 是最后一条指令 VA inclusive 不是 end+1**；manual=true 防分析器覆盖
+
+### S8-F 集成
+
+- `builtin_tools.h`：新增 5 个 `registerXxxTools` 自由函数声明
+- `tool_registry.cpp:40-54`：`registerBuiltinTools()` 末尾追加 5 个调用
+- `src/CMakeLists.txt`：追加 5 个 `.cpp` 源文件
+
+### S8-G 预设升级
+
+- `kPresetSchemaVersion` 11 → 12
+- `analyze-function` 白名单扩到 63（追加 13 个 S8 工具）
+- `anti-anti-debug` 扩入 S8-A 三工具 + S8-B 两工具（enum_handles/enum_windows），systemPrompt 改"先 passive diagnosis 后 active neutralization"流程
+- 新增 `malware-triage`（28 工具，maxIter=25）：纯只读 + 仅允许 label/comment 沉淀；workflow = PEB 姿态 → list_threads → enum_handles(全) → enum_tcp → enum_windows(隐藏) → get_seh_chain → memory_map(RWX 私有) → 标注
+- 新增 `unpack-helper`（24 工具，maxIter=30）：HW write BP 监控 RWX 区 → run_continue → HW execute BP 抓 OEP jump → `get_trace_record_info` 验真假 OEP → `add_function` 修补分析器 → `stack_peek` 恢复 pushad 上下文
+- 决策：原计划的 `anti-debug-bypass` 与 `anti-anti-debug` 语义重叠（一个诊断、一个中和），合并为后者增强而非独立预设
+
+### S8-H 双架构编译
+
+- x64 Release：零警告零错误，`x64dbg_ai_plugin.dp64`
+- x86 Release：初始有 1 个 C4127（seh_tool.cpp:91 `if (isX64 && ...)` 在 x86 时 isX64 为编译期常量），改 `if constexpr (sizeof(duint)==8)` 修复后零警告，`x64dbg_ai_plugin.dp32`
+
+### SDK 探查发现（S8 期间）
+
+- ❌ NOT FOUND in SDK：
+  - `ValueFromString` — 应用 `ValFromString`
+  - `GetPrivilegeList` — SDK 不暴露权限列表 API
+  - `VectoredHandler*` — VEH 链无公开 API
+  - `enum_constants` 全量 — 只暴露按值查名的 `translate_error_code`
+- 已验真签名：
+  - `DbgGetPebAddress(bridgemain.h:1236)`：`duint(DWORD pid)`
+  - `DbgGetThreadList(:1184)`：`void(THREADLIST*)`，`list.list` 需手动 `BridgeFree`
+  - `DbgFunctions()->EnumHandles/GetHandleName/EnumWindows/EnumTcpConnections`（`_dbgfunctions.h:241-258`）
+  - `Script::Function::Add(start,end,manual,instructionCount=0)`（`_scriptapi_function.h:19`）
+  - `Script::Register::GetCSP()` 才是 duint 栈指针（`_scriptapi_register.h:280`），`GetSP` 是 16 位

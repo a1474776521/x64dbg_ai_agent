@@ -51,6 +51,11 @@ void ToolRegistry::registerBuiltinTools()
     registerAssemblerPatternTools(*this);
     registerCfgTools(*this);
     registerPatchMiscTools(*this);
+    registerAntiDebugTools(*this);
+    registerForensicTools(*this);
+    registerSehTool(*this);
+    registerInjectionStackTools(*this);
+    registerTraceErrorFuncTools(*this);
     XAI_LOG_INFO("ToolRegistry::registerBuiltinTools(): total {} tools", tools_.size());
 }
 

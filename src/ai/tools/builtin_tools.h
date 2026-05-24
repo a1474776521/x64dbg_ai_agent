@@ -76,4 +76,29 @@ void registerCfgTools(ToolRegistry& reg);
 //   gui_focus_disasm / gui_focus_dump (DbgControl，无副作用)
 void registerPatchMiscTools(ToolRegistry& reg);
 
+// 在 reg 中注册反调试洞察工具（S8-A）：
+//   list_threads / get_peb_address / get_anti_debug_flags
+// 三个均为 Read；后者会自动读取 PEB.BeingDebugged / NtGlobalFlag / Heap.Flags
+void registerAntiDebugTools(ToolRegistry& reg);
+
+// 在 reg 中注册取证类工具（S8-B）：
+//   enum_handles / enum_windows / enum_tcp_connections
+// 全部 Read；enum_handles 支持 type_filter 子串过滤
+void registerForensicTools(ToolRegistry& reg);
+
+// 在 reg 中注册 SEH 链查询工具（S8-C）：
+//   get_seh_chain (Read，x64 下返回空数组并附 hint 指向 .pdata/RtlLookupFunctionEntry)
+void registerSehTool(ToolRegistry& reg);
+
+// 在 reg 中注册注入辅助 + 栈操作工具（S8-D）：
+//   remote_alloc / remote_free / stack_push (Write+confirm)
+//   stack_peek (Read，offset 单位是 pointer-sized 槽，不是字节！)
+void registerInjectionStackTools(ToolRegistry& reg);
+
+// 在 reg 中注册 trace 记录 / 错误码翻译 / 函数注册工具（S8-E）：
+//   get_trace_record_info (Read)
+//   translate_error_code (Read，lazy-init 全局 EnumErrorCodes+EnumExceptions 表)
+//   add_function (Write+confirm，end 为最后一条指令起始 VA，不是 end+1)
+void registerTraceErrorFuncTools(ToolRegistry& reg);
+
 }  // namespace x64ai

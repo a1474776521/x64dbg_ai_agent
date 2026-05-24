@@ -27,7 +27,7 @@ namespace x64ai {
 // 每次修改 defaultPresets() 的语义（systemPrompt 措辞、enabledTools 列表等）
 // 都要 ++ 此版本；PresetStore 加载时若检测到磁盘版本更低，会用新版 defaults
 // 覆盖所有 readonly=true 的预设，但保留用户自定义（readonly=false）。
-constexpr int kPresetSchemaVersion = 11;
+constexpr int kPresetSchemaVersion = 12;
 
 struct AgentPreset {
     std::string id;

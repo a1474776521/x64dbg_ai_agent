@@ -4,13 +4,13 @@
 > **每次完成一个 S 段后，更新本表的 ✅/❌ 列 + Done 行**。
 > 横向对照：[features.md](features.md) 是最终能力快照；本文件是规划+进度。
 
-最后更新：2026-05-24（S7 完成；S8 未启动）
+最后更新：2026-05-24（S8 完成；下一步 S9 = G-10 工具与预设管理 UI 重构）
 
 ---
 
 ## 1. 工具（"技能"）矩阵
 
-### 1.1 已实现（49 个，✅ = 真机可用）
+### 1.1 已实现（63 个，✅ = 真机可用）
 
 | # | 类别 | 工具 | 状态 | 能力一句话 | SDK API | 阶段 |
 |---|---|---|---|---|---|---|
@@ -81,20 +81,26 @@
 | 53 | GUI | `gui_focus_disasm` | ✅ | 滚动反汇编视图到 VA（DbgControl，无副作用） | `GuiDisasmAt` | S7 |
 | 54 | GUI | `gui_focus_dump` | ✅ | 滚动 dump 视图到 VA；可选 index∈[1,5] 选 Dump1..5 | `GuiDumpAt` / `GuiDumpAtN` | S7 |
 
-#### P2 场景化（S8+ 按需）
+#### P2 场景化（S8 已完成 ✅ — 13 个工具实装；2026-05-24，tag `s8-done`）
 
-| # | 类别 | 工具 | 状态 | 场景 | SDK API | 阶段 |
+| # | 类别 | 工具 | 状态 | 能力一句话 | SDK API | 阶段 |
 |---|---|---|---|---|---|---|
-| 53 | 反调试 | `get_peb_address` / `get_thread_list` | ❌ | 读 PEB.BeingDebugged | `DbgGetPebAddress` / `DbgGetThreadList` | S8 |
-| 54 | 恶意软件 | `enum_handles` | ❌ | 列打开的文件/互斥体 | `DbgFunctions()->EnumHandles` | S8 |
-| 55 | 恶意软件 | `enum_tcp_connections` | ❌ | C2 连接 | `DbgFunctions()->EnumTcpConnections` | S8 |
-| 56 | 异常 | `get_seh_chain` | ❌ | SEH 链分析 | `DbgFunctions()->GetSEHChain` | S8 |
-| 57 | 注入 | `remote_alloc` / `remote_free` | ❌ | 注入 shellcode 区 | `Script::Memory::RemoteAlloc/Free` | S8 |
-| 58 | 栈 | `stack_push` / `stack_pop` | ❌ | 栈修复 / 伪造返回地址 | `Script::Stack::Push/Pop` | S8 |
-| 59 | trace | `get_trace_record_hits` | ❌ | 找代码热点 / 未执行路径 | `DbgFunctions()->GetTraceRecord*` | S8 |
-| 60 | 翻译 | `enum_constants` / `error_code_to_name` | ❌ | `0xC0000005` → `ACCESS_VIOLATION` | `DbgFunctions()->EnumConstants` | S8 |
-| 61 | 函数 | `set_function_range` | ❌ | 修正分析器漏识别的函数 | `Script::Function::Add` | S8 |
-| 62 | 脚本 | `save_script` | ❌ | agent 写脚本到 scripts/（需 sandbox） | `std::filesystem` | S8 |
+| 55 | 反调试洞察 | `list_threads` | ✅ | 枚举所有线程：TID/CIP/SuspendCount/Priority/WaitReason/UserTime/KernelTime | `DbgGetThreadList` + 手动 `BridgeFree(list.list)` | S8 |
+| 56 | 反调试洞察 | `get_peb_address` | ✅ | 取主进程或指定线程的 PEB；可选 read_bytes 同时返回前 N 字节 | `DbgGetPebAddress` | S8 |
+| 57 | 反调试洞察 | `get_anti_debug_flags` | ✅ | 一键诊断 PEB.BeingDebugged / NtGlobalFlag / ProcessHeap，按 ptr_size 切偏移（x86 +0x68/+0x18 vs x64 +0xBC/+0x30） | `DbgGetPebAddress` + `DbgMemRead` | S8 |
+| 58 | 取证 | `enum_handles` | ✅ | 枚举句柄；两阶段 `EnumHandles` + `GetHandleName` 拿 type/name；支持 type_filter CI 子串 | `DbgFunctions()->EnumHandles/GetHandleName` | S8 |
+| 59 | 取证 | `enum_windows` | ✅ | 枚举窗口；handle/title/class/threadId/style/styleEx/wndProc/位置 | `DbgFunctions()->EnumWindows` | S8 |
+| 60 | 取证 | `enum_tcp_connections` | ✅ | C2 取证：本地/远端 IP:Port + 状态字串 | `DbgFunctions()->EnumTcpConnections` | S8 |
+| 61 | 异常 | `get_seh_chain` | ✅ | x86 链表 SEH；x64 返空 + hint 引向 .pdata/RtlLookupFunctionEntry；用 `if constexpr` 规避 C4127 | `DbgFunctions()->GetSEHChain` + `BridgeFree(records)` | S8 |
+| 62 | 注入 | `remote_alloc` | ✅ | 在被调试进程分配 VirtualAlloc 区；SDK 内部固定 PAGE_EXECUTE_READWRITE；64MB 上限 | `Script::Memory::RemoteAlloc` | S8 |
+| 63 | 注入 | `remote_free` | ✅ | 释放 remote_alloc 返回的基址（不能传中间页） | `Script::Memory::RemoteFree` | S8 |
+| 64 | 栈 | `stack_push` | ✅ | 压栈 duint；ESP/RSP -= ptr_size；返回压栈前的 top + 新 SP | `Script::Stack::Push` + `Script::Register::GetCSP` | S8 |
+| 65 | 栈 | `stack_peek` | ✅ | 读 [SP+offset×ptr_size]；offset 单位是 SLOT 不是字节（坑） | `Script::Stack::Peek` + `GetCSP` | S8 |
+| 66 | trace | `get_trace_record_info` | ✅ | 合并 hit_count + byte_type + page record_type（None/BitExec/.../WordWithExec）；hint 引导 enable | `GetTraceRecordHitCount/ByteType/Type` | S8 |
+| 67 | 翻译 | `translate_error_code` | ✅ | 0xC0000005 → EXCEPTION_ACCESS_VIOLATION；lazy-init unordered_map 全表（EnumErrorCodes + EnumExceptions），后续 O(1) | `EnumErrorCodes` + `EnumExceptions` + `std::call_once` | S8 |
+| 68 | 函数 | `add_function` | ✅ | 注册函数区间；end 是最后一条指令 VA inclusive（不是 end+1）；manual=true 默认 | `Script::Function::Add(start,end,manual)` | S8 |
+
+#### P3 后续场景化（暂无）
 
 ### 1.3 不包装（设计取舍）
 
@@ -109,44 +115,47 @@
 | `DbgScriptStep/Abort/BpToggle/...` | 给 x64dbg 自家脚本编辑器用，agent 只需 Load+Run |
 | `DbgGetEncodeType*` / `DbgTypeVisit` 等 | 字节显示编码 / 类型 widget，纯 GUI 渲染 |
 | jansson / lz4 直接暴露 | 已有 nlohmann / 自研，无需透传 |
+| `ValueFromString` / `GetPrivilegeList` / `VectoredHandler*` | SDK 中**不存在**（S8 探查确认；ValueFromString 应用 `ValFromString`；权限列表/VEH 链无公开 API） |
+| `stack_pop` | 真弹出会破坏 ESP 一致性，反向工程几乎用不到；S8 决定不暴露，需要时让 LLM 用 stack_peek + set_register 显式做 |
+| `enum_constants` 全量 | 只暴露 `translate_error_code`（按值查名）；全量枚举对 LLM 是噪音 |
 
 ---
 
 ## 2. 工作流预设（"预设"）矩阵
 
-### 2.1 已实现（7 个）
+### 2.1 已实现（14 个）
 
 | # | 预设 ID | 状态 | 中文名 | 启用工具 | 上下文菜单 | maxIter | 阶段 |
 |---|---|---|---|---|---|---|---|
-| 1 | `freeform` | ✅ | 自由 Agent | 全 37 | 否 | 20 | M4 |
-| 2 | `analyze-function` | ✅ | 分析当前函数 | 全 37（含写+脚本+S6 沉淀+地图） | 是 | 20 | M4 + S3/4/5/6 扩 |
+| 1 | `freeform` | ✅ | 自由 Agent | 全 62 | 否 | 20 | M4 |
+| 2 | `analyze-function` | ✅ | 分析当前函数 | 全 62（含写+脚本+S6 沉淀+地图+S7 高级+S8 全部 13） | 是 | 20 | M4 + S3-S8 持续扩 |
 | 3 | `who-calls-here` | ✅ | 谁调用了这里 | 8（纯读） | 是 | 20 | M4 |
 | 4 | `string-api-context` | ✅ | 字符串与 API 关联 | 7（纯读） | 是 | 20 | M4 |
 | 5 | `explain-here` | ✅ | 解释此处 | 5（纯读） | 是 | 6 | M4 |
 | 6 | `annotate-function` | ✅ | 标注当前函数 | 13（读 11 + 写 set_label/set_comment） | 是 | 20 | S6 |
 | 7 | `map-program` | ✅ | 程序地图 | 8（纯读：list_modules + memory_map + page_protect + list_functions + imports + exports + list_labels + rag_search） | 是 | 20 | S6 |
+| 8 | `crack-license` | ✅ | 破解许可校验 | 21（定位+注释+控制+set_flag+patch+审计） | 是 | 20 | S7 |
+| 9 | `anti-anti-debug` | ✅ | 反反调试 | 30+（S8 后扩了 get_anti_debug_flags / list_threads / enum_handles / enum_windows 共 5 个被动诊断工具，systemPrompt 增"先 passive 后 active"） | 是 | 20 | S7→S8 增强 |
+| 10 | `cfg-explorer` | ✅ | 控制流图探索 | 12（CFG + 标注查询） | 是 | 12 | S7 |
+| 11 | `patch-and-verify` | ✅ | 补丁与验证 | 20（list/restore + 备份-修改-验证流程） | 是 | 20 | S7 |
+| 12 | `trace-input` | ✅ | 追踪输入数据 | 21（HW write BP + wait_for_event + dump 焦点） | 是 | 20 | S7 |
+| 13 | `malware-triage` | ✅ | 恶意代码取证 | 28（纯只读 + 仅允许 label/comment 沉淀；S8-A/B/C 全部 + translate_error_code） | 是 | 25 | S8 |
+| 14 | `unpack-helper` | ✅ | 脱壳辅助 | 24（HW BP + run_continue + get_trace_record_info + add_function + stack_peek） | 是 | 30 | S8 |
 
 ### 2.2 计划中
 
 #### S6 目标（已完成 ✅ — 见 2.1 表第 6–7 行）
 
-#### S7 目标（基于高级断点+汇编）
+#### S7 目标（已完成 ✅ — 见 2.1 表第 8–12 行；tag `s7-done`）
 
-| # | 预设 ID | 状态 | 中文名 | 依赖新工具 | 用途 |
-|---|---|---|---|---|---|
-| 8 | `crack-license` | ❌ | License 破解 | `assemble_at` / 现有断点+patch | 找校验点 → patch jne→jmp |
-| 9 | `anti-anti-debug` | ❌ | 反反调试 | `set_conditional_bp` / `pattern_replace` | 扫常见反调试 pattern + 自动 patch |
-| 10 | `cfg-explorer` | ❌ | 控制流浏览 | `get_cfg` | CFG → mermaid，标识未执行块 |
-| 11 | `patch-and-verify` | ❌ | 补丁验证 | `assemble_at` / `list_patches` / `restore_patch` | 写补丁 → 测试 → 失败自动回滚 |
-| 12 | `trace-input` | ❌ | 数据追踪 | `set_hw_breakpoint` | 跟踪某缓冲区被谁读/写 |
+#### S8 目标（已完成 ✅ — 见 2.1 表第 13–14 行；anti-anti-debug 同步扩 5 工具；tag `s8-done`）
 
-#### S8 目标（场景化）
-
-| # | 预设 ID | 状态 | 中文名 | 依赖新工具 | 用途 |
-|---|---|---|---|---|---|
-| 13 | `unpack-helper` | ❌ | 脱壳辅助 | `get_memory_map` / `set_page_protect` | 监控新建 RWX + EIP 进入 RWX → 自动 dump |
-| 14 | `malware-triage` | ❌ | 恶意软件分流 | `enum_tcp_connections` / `enum_handles` / `get_seh_chain` | 列 C2 + 文件句柄 + 推测家族 |
-| 15 | `decrypt-loop-runner` | ✅(可选) | 批量解密 | 已有 `load_script` / `run_script_file` | 用户预写 .script 跑 N 次解密，agent 收结果（**已可手工组合，无需新预设也行**） |
+| # | 预设 ID | 状态 | 备注 |
+|---|---|---|---|
+| 13 | `malware-triage` | ✅ | 纯只读 + 仅 label/comment 沉淀；S8-A/B/C + translate_error_code |
+| 14 | `unpack-helper` | ✅ | HW BP + trace_record + add_function + stack_peek |
+| —  | `anti-debug-bypass`（原计划） | 合并 | 与 `anti-anti-debug` 语义重叠，决策为扩 anti-anti-debug 加 PEB 被动诊断 |
+| —  | `decrypt-loop-runner` | 不做 | 用户可用 freeform + load_script 自由组合 |
 
 ---
 
@@ -161,8 +170,8 @@
 | S4 | 数据写三件套 | 3 | 0 | v8 | ✅ `s4-done` |
 | S5 | 脚本三件套 | 3 | 0 | v9 | ✅ `s5-done` |
 | **S6** | **基础控制 + 沉淀（label/comment） + 程序地图** | **10** | **2** | **v10** | ✅ `s6-done` |
-| **S7** | **高级断点 + 汇编 + CFG + 补丁管理** | **10** | **5** | **v11** | ❌ 未启动 |
-| **S8** | **场景化（反调试 / 恶意软件 / 注入 / 脱壳）** | **10** | **2** | **v12** | ❌ 未启动 |
+| **S7** | **高级断点 + 汇编 + CFG + 补丁管理 + GUI 焦点** | **12** | **5** | **v11** | ✅ `s7-done` |
+| **S8** | **场景化（反调试洞察 / 取证 / SEH / 注入+栈 / trace+错误码+函数）** | **13** | **2**(+扩 anti-anti-debug) | **v12** | ✅ `s8-done` |
 
 ---
 
@@ -191,11 +200,12 @@
 | G-2 | 验证 DeepSeek / Copilot prompt caching 是否启用（system prompt + tools 缓存命中后 input 价 ÷10） | P0 | ❌ | S6 完成后立即查 |
 | G-3 | `AgentWorker` 加 `maxToolCalls=30` 配置（与 maxIter 区分） | P1 | ❌ | S7 |
 | G-4 | system prompt 加"同义工具决策树"（step_in/over/out/run_until/run_continue 何时用谁） | P1 | ❌ | S6 完成后 |
-| G-5 | PresetEditor UI 加"代价提示"：勾工具时显示"预计 +X tokens/轮" | P2 | ❌ | S8 |
-| G-6 | PresetEditor UI 加"工具分组开关"：按 category 整组勾选 | P2 | ❌ | S8 |
+| G-5 | PresetEditor UI 加"代价提示"：勾工具时显示"预计 +X tokens/轮"（**并入 G-10**） | P2 | ❌ | S8 |
+| G-6 | PresetEditor UI 加"工具分组开关"：按 category 整组勾选（**并入 G-10**） | P2 | ❌ | S8 |
 | G-7 | write_audit.log 旁加 metrics 计数（read 工具不写大日志，只记总次数） | P3 | ❌ | 视需要 |
 | G-8 | （研究类）动态工具子集：第一轮 `request_tools(["category"])` 按需解锁 | P3 | ❌ | 实现复杂，暂不做 |
 | G-9 | 工具/预设描述与 userTemplate 中文化（详情见 5.3） | P2 | ❌ | S7 之后单独评估 |
+| **G-10** | **工具与预设管理界面重构 + 分类系统**（详情见 5.4） | **P1** | ❌ | **S8 完成后立即排期；用户 2026-05-24 明确提出** |
 
 ### 5.2 治理原则（S6/S7/S8 实施时附带遵守）
 
@@ -220,3 +230,60 @@ S6 期间用户提出"全量中文化"诉求。结论 **暂不做，先收尾 S6
 | 预设 `userTemplate` | 英文模板 | 可中文化（B 档） | 用户感知，影响较小 |
 
 实施前置条件：**G-2 验证 prompt cache 启用情况后再决定 A/B 档**。
+
+### 5.4 G-10 工具与预设管理界面重构 + 分类系统（新需求 2026-05-24）
+
+**背景**：S7 后工具数 49、预设数 12，PresetEditor 现状是一个长 QListWidget 平铺所有工具勾选框 + 一个平铺预设列表；继续增长（S8 预计再加 8–12 个工具 + 3–5 预设）会让用户在勾选 / 浏览 / 找预设时严重失焦。
+
+**目标**：
+1. 工具分类（categorization）— 在数据层给每个工具加 `group` 字段（**与现有 `ToolCategory`=Read/DbgControl/Write 正交，是"功能域"分组**），UI 用分组渲染。
+2. 预设分类 — 给每个预设加 `tags`（多标签）+ `group`（单分组），UI 用左侧分组导航 + 右侧详情。
+3. 工具勾选 UI 重做 — 分组折叠面板 + 组级"全选/反选"+ 顶部搜索框 + 顶部多 chip 过滤（按 Read/Write/分组）。
+4. 预设列表 UI 重做 — 左侧分组树（场景：破解/反反调试/初探/全能/自定义）+ 右侧卡片视图（含标签、工具数、provider、只读锁）。
+5. 兼容性 — `group` / `tags` 都是新增可选字段，老配置启动时**按工具 name 前缀+关键字自动推断**初值，不要求用户手动迁移。
+
+**工具分组方案**（10 组，覆盖现 49 个）：
+
+| group | 工具示例 | 数量 |
+|---|---|---|
+| `static-info` | get_module_info / list_modules / get_module_imports / get_module_exports / get_section_info | ~6 |
+| `disasm-cfg` | get_disasm / get_function_range / list_functions / get_cfg | ~4 |
+| `memory-search` | read_memory / search_memory / pattern_search / get_strings / get_memory_map / get_page_protect | ~6 |
+| `register-stack` | get_registers / get_stack / get_thread_list | ~3 |
+| `breakpoint` | set_breakpoint / remove_breakpoint / list_breakpoints / set_hw_breakpoint / remove_hw_breakpoint / set_conditional_bp | ~6 |
+| `execution-control` | run_continue / pause_debug / step_into / step_over / step_out / run_until / wait_for_event | ~7 |
+| `annotation` | set_label / get_label / list_labels / set_comment / get_comment / list_comments | ~6 |
+| `write-patch` | write_memory / assemble_at / pattern_replace / set_flag / set_page_protect / list_patches / restore_patch | ~7 |
+| `gui-misc` | gui_focus_disasm / gui_focus_dump / format_with_dbg / run_dbg_command | ~4 |
+| `agent-meta` | rag_search / list_scripts / load_script / run_script_file / locate_api_callers | ~5 |
+
+> 实施时按当前真实工具列表回拢，每组期望 3–8 个，过大就拆。
+
+**预设分组方案**（4 组）：
+
+| group | 预设 | 说明 |
+|---|---|---|
+| `general` | freeform / analyze-function / explain-here | 通用与全能 |
+| `exploration` | map-program / cfg-explorer / who-calls-here / string-api-context | 只读探索 |
+| `cracking` | crack-license / patch-and-verify / anti-anti-debug | 写 / 补丁类 |
+| `tracing` | trace-input / annotate-function | 动态追踪与沉淀 |
+
+**预设标签**（与 group 正交，多选）：`read-only` / `write` / `hw-bp` / `cfg` / `patch` / `annotation` / `dataflow` / `anti-debug`。UI 可按 tag 二级筛。
+
+**Schema 影响**：
+- `Tool` 基类加 `virtual std::string group() const { return "agent-meta"; }`（默认值兜底，子类按需 override）。
+- `AgentPreset` 加 `std::string group;` + `std::vector<std::string> tags;`；`kPresetSchemaVersion` 11 → 12；老盘文件无字段时启动期按 id 推断填充并回写。
+
+**UI 改造点**（PresetEditor.cpp / PresetListPanel）：
+- 工具勾选：`QListWidget` → `QTreeWidget`（组节点 + 子工具节点 + 三态勾选）；顶部 `QLineEdit` 名称搜索 + 一排 `QToolButton` chip 过滤（Read/DbgControl/Write/各 group）。
+- 预设列表：左侧 `QTreeView`（group → 预设）；右侧 `QStackedWidget` 卡片视图。
+- 工具数/估算 token（G-5）合并进卡片右下角 badge。
+- 组级"全选/反选/反选 Read-only"按钮（G-6）。
+
+**验收**：
+1. 49 工具按 group 渲染成 10 个折叠组；搜索 "hw" 能立刻定位到 set_hw_breakpoint。
+2. 12 预设左侧分 4 组，"crack-license" 在 `cracking` 组下；右侧卡片显示 "5 tools · cracking · write,patch · deepseek · 🔒"。
+3. 老 `agent_presets.json`（schema 11）启动自动迁移到 12，无需用户介入。
+4. 新建预设默认 group=`general`、tags=[]，可在 UI 编辑。
+
+**拆分到 S9（独立阶段）执行**：S8 先把 P2 场景化工具实现完，G-10 紧接 S8 后作为 **S9 = "UI + 分类治理"** 单独立项，避免和工具堆积纠缠。

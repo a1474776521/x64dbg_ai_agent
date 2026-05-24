@@ -1,0 +1,69 @@
+# ============= 构建产物 =============
+build/
+build-*/
+out/
+release/
+dist/
+*.user
+*.suo
+
+# ============= 第三方 SDK =============
+# pluginsdk 由脚本从 x64dbg snapshot 拷入
+third_party/pluginsdk/
+
+# ============= vcpkg =============
+vcpkg_installed/
+
+# ============= IDE =============
+.vs/
+.vscode/
+.idea/
+CMakeSettings.json
+CMakeLists.txt.user
+
+# ============= 编辑器临时文件 =============
+*.swp
+*~
+*.bak
+*.orig
+
+# ============= MSVC =============
+*.pdb
+*.ilk
+*.exp
+*.obj
+*.tmp
+*.log
+
+# ============= Qt MOC =============
+moc_*.cpp
+moc_*.h
+ui_*.h
+qrc_*.cpp
+
+# ============= 操作系统 =============
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ============= 私密配置 =============
+config.local.json
+*.token
+*.pat
+.env
+.env.local
+
+# ============= 项目运行时产物 =============
+# %APPDATA%\x64dbg-ai-plugin 不在仓库里，这里仅防开发者误拷入仓
+secrets/
+projects/*.db
+projects/*.db-*
+logs/
+
+# ============= tests 内构建产物 =============
+tests/*/build/
+tests/*/build-*/
+
+# ============= 发行包 / 个人笔记 =============
+x64dbg-ai-plugin-*.zip
+项目提示词.txt

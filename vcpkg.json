@@ -1,0 +1,18 @@
+{
+  "name": "x64dbg-ai-plugin",
+  "version-string": "0.1.0",
+  "description": "AI assistant plugin for x64dbg, integrating GitHub Copilot backend.",
+  "dependencies": [
+    {
+      "name": "cpr",
+      "features": ["ssl"]
+    },
+    "nlohmann-json",
+    "spdlog",
+    {
+      "name": "sqlite3",
+      "features": ["json1", "fts5"]
+    },
+    "openssl"
+  ]
+}

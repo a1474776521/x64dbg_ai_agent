@@ -1,0 +1,17 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+  <qresource prefix="/x64dbg-ai">
+    <file alias="styles/theme_dark.qss">styles/theme_dark.qss</file>
+    <file alias="icons/login.svg">icons/login.svg</file>
+    <file alias="icons/logout.svg">icons/logout.svg</file>
+    <file alias="icons/refresh.svg">icons/refresh.svg</file>
+    <file alias="icons/send.svg">icons/send.svg</file>
+    <file alias="icons/plus.svg">icons/plus.svg</file>
+    <file alias="icons/trash.svg">icons/trash.svg</file>
+    <file alias="icons/user.svg">icons/user.svg</file>
+    <file alias="icons/bot.svg">icons/bot.svg</file>
+    <file alias="icons/search.svg">icons/search.svg</file>
+    <file alias="icons/git-branch.svg">icons/git-branch.svg</file>
+    <file alias="icons/folder-clock.svg">icons/folder-clock.svg</file>
+  </qresource>
+</RCC>

@@ -121,6 +121,29 @@
 - **方案**：后续可改为 `ReplaceFileW` + 3 次 50/100/200ms 退避重试；当前 in-place fallback 已可靠
 - **位置**：`src/storage/preset_store.cpp::save`
 
+### K-19：run_until 的 one-shot 走 DbgCmdExec 而非 Script API
+- **现象**：`run_until(addr)` 实现走的是 `DbgCmdExecDirect("bp 0x.., ss")` 命令文本，不是 `Script::Debug::SetBreakpoint`
+- **原因**：x64dbg Script::Debug API 没暴露 singleshoot 标志，必须用命令字符串里的 `ss` 选项
+- **副作用**：依赖命令解析的稳定性；命令拼接前已 `std::format("0x{:x}", addr)` 规范化，理论 OK
+- **风险**：x64dbg 升级时若变更 `bp <addr>, <option>` 语法（极低概率），需同步更新
+- **影响**：低；timeout 路径已有 `DeleteBreakpoint` 兜底清理
+- **位置**：`src/ai/tools/debug_write_tools.cpp::RunUntilTool::invoke`
+
+### K-20：run_dbg_command 白名单按"首 token"判定
+- **现象**：仅检查命令首个 token 是否在 15 token 白名单内（按空白/逗号切，转小写）
+- **副作用**：`bp 0x401000, ss` 这种带选项的命令首 token 是 `bp`，能过白名单；但参数部分不做语义检查，理论上可被 prompt injection 构造 `bp 0x401000; <malicious>` 之类
+- **缓解**：x64dbg 命令解析本身不支持 `;` 串行执行；多命令需要换行或 script，单次 `DbgCmdExecDirect` 一次只发一行
+- **影响**：低；但严格起见建议未来加参数 sanity check（地址范围 / 模块名格式 etc）
+- **位置**：`src/ai/tools/debug_write_tools.cpp::RunDbgCommandTool::isWhitelisted`
+
+### K-21：ToolConfirmDialog 跨线程 BlockingQueuedConnection 死锁风险
+- **现象**：write 工具在 worker 线程调 `confirmFromBackground` → `invokeMethod(app, lambda, BlockingQueuedConnection)` 切 GUI 线程并阻塞等返回
+- **风险**：若 GUI 线程正在等 worker 线程（如 `AgentWorker::waitForFinished`），双向等待会死锁
+- **当前规避**：`AgentWorker` 用 `QtConcurrent::run` 跑后台，GUI 线程不阻塞等 worker；工具调用过程中 GUI 线程只跑事件循环
+- **若引入 wait_for_event 嵌套 + 取消按钮路径**：需确保取消信号通过 `cancelFlag.store(true)` 非阻塞投递，不在 GUI 线程做 join
+- **影响**：低；当前架构安全。但后续若加"批量执行多个工具的进度对话框 + 取消"需特别小心
+- **位置**：`src/ui/tool_confirm_dialog.cpp::confirmFromBackground`
+
 ---
 
 ## ⚪ 未支持（设计取舍，不是 bug）

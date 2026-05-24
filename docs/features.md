@@ -236,8 +236,9 @@
 | `%APPDATA%\x64dbg-ai-plugin\config.json` | 应用配置（HTTP 超时、log 级别等） | 只读（写回未实现） |
 | `%APPDATA%\x64dbg-ai-plugin\provider.txt` | 当前激活的 Provider 名 | `ProviderManager::setProvider` |
 | `%APPDATA%\x64dbg-ai-plugin\logs\plugin.log` | spdlog 文件输出 | `XAI_LOG_*` 宏 |
+| `%APPDATA%\x64dbg-ai-plugin\logs\write_audit.log` | S3 写工具审计（JSON 一行一条；rotating 4 MB×10） | `util/logging.cpp::auditLog` |
 | `%APPDATA%\x64dbg-ai-plugin\projects\<sha>.db` | 会话 + RAG 数据库 | `SessionStore` |
-| `%APPDATA%\x64dbg-ai-plugin\agent_presets.json` | Agent 预设（M4.6a，schemaVersion=3） | `PresetStore` |
+| `%APPDATA%\x64dbg-ai-plugin\agent_presets.json` | Agent 预设（schemaVersion=7，S3 后加入 6 个写工具到 analyze-function） | `PresetStore` |
 | `%APPDATA%\x64dbg-ai-plugin\secrets\*.bin` | DPAPI 加密的 token/key | `SecretStore` |
 
 ### HTTP 超时（M3.3 修复后）
@@ -283,7 +284,7 @@
 
 LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什么、再算什么、何时回答"。
 
-### 工具清单（S1 后 14 个，全部只读 + 无状态）
+### 工具清单（S3 后 21 个：14 个只读 + 1 个控制 + 6 个写）
 
 | 类别 | 工具 | 说明 |
 |---|---|---|
@@ -300,6 +301,37 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 |  | `get_thread_list()` | 当前进程线程列表 |
 | **S1 新增** | `eval_expression(expr)` | 把 `[rbp+8]+10`、`kernel32.GetProcAddress` 等交给 `DbgEval` 求值，返回 hex+dec |
 |  | `list_breakpoints(type?)` | 列出 software/hardware/memory/dll/exception 断点，每条含 addr/enabled/active/hitCount/mod/name；硬上限 1024 条 |
+| **S2 调试控制** | `wait_for_event(events, timeout_ms, cancellable)` | 阻塞等 Breakpoint/Stepped/Paused/Resumed/Running/DebugStopped 事件之一；50ms 切片轮询 EventBus + 响应 ToolContext.cancelFlag；category=DbgControl（不弹 confirm 但写 audit） |
+| **S3 写工具**（全部 category=Write + 5s confirm + audit） | `set_breakpoint(addr, type=software\|hardware)` | software 走 `Script::Debug::SetBreakpoint`；hardware 走 `SetHardwareBreakpoint`（最多 4 个，超限 x64dbg 自己拒） |
+|  | `remove_breakpoint(addr)` | 软硬都试一遍删除，返回 `{software_removed, hardware_removed}` |
+|  | `step_in(timeout_ms=30000)` | `DbgCmdExecDirect("StepInto")` + 私有 waitForStop（50ms 切片三路轮询 Paused/Breakpoint/Stepped + cancelFlag + `!DbgIsDebugging()` 检查） |
+|  | `step_over(timeout_ms=30000)` | 同上，`StepOver` |
+|  | `run_until(addr, timeout_ms=30000)` | `DbgCmdExecDirect("bp 0x.., ss")` 装 one-shot 断点 + `run` + waitForStop；timeout 路径兜底 `DeleteBreakpoint` 清理 |
+|  | `run_dbg_command(command)` | 命令逃生口；首 token（按空白/逗号切）小写后查 15 token 白名单：`bp/bpc/bphwc/bpd/bpe` + `run/stepinto/stepover/stepout/pause` + `db/dw/dd/dq`；非白名单直接 deny + warn |
+
+### ToolPolicy 三档（S3）
+
+| Category | UI confirm | Audit | 适用 |
+|---|---|---|---|
+| `Read` | 否 | 否 | 全部读工具（基础读取 / 静态分析 / 动态上下文 / eval_expression / list_breakpoints） |
+| `DbgControl` | 否 | begin/end | `wait_for_event` 等"占用执行流但不改状态"工具 |
+| `Write` | **5s 倒计时模态** | begin/end + confirmed/denied_by_user/denied_no_ui | 全部写工具（断点 / 单步 / run_until / run_dbg_command） |
+
+#### Write 工具 5s confirm（S3-C）
+
+- `ToolConfirmDialog`：模态 QDialog，5 秒倒计时；"允许"按钮初始 disabled，文本 `允许 (Ns)`，QTimer 每秒 -1，归零后启用并去掉计数
+- `denyButton_->setDefault(true)` → ESC/Enter **默认拒绝**；安全为先
+- 工具运行在 worker 线程时通过 `QMetaObject::invokeMethod(app, lambda, BlockingQueuedConnection)` 切到 GUI 线程并阻塞等返回
+- 无 `QApplication` 时安全 deny + 写 `phase=denied_no_ui`
+- 参数 JSON 在等宽字体 dark 主题块内展示，高级用户可审
+
+#### Write 工具审计日志（S3-B）
+
+- 路径：`%APPDATA%\x64dbg-ai-plugin\logs\write_audit.log`
+- 独立 spdlog logger `x64dbg-ai-audit`；rotating 4 MB × 10；pattern `%v`（纯 JSON 一行一条）；`flush_on(info)` 保证即时落盘
+- JSON 字段：`ts(ms epoch) / tool / category / args / phase / sha / session` + 终态 `ok / error / data_snippet / elapsed_ms`
+- phase ∈ `{begin, end, confirmed, denied_by_user, denied_no_ui}`
+- 便于 grep/jq 复盘 agent 行为：`type write_audit.log | jq 'select(.phase=="denied_by_user")'`
 
 ### Agent loop
 
@@ -370,14 +402,14 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 
 ```json
 {
-  "schemaVersion": 4,
+  "schemaVersion": 7,
   "presets": [{ "id": "...", "name": "...", "systemPrompt": "...", "userTemplate": "...",
                 "enabledTools": ["..."], "maxIter": 20, "temperature": 0.2,
                 "provider": "deepseek", "model": "", "showInContextMenu": true, "readonly": true }]
 }
 ```
 
-- 启动时 `diskSchema < kPresetSchemaVersion(=4)`：用新版 defaults 覆盖所有 readonly；用户预设保留
+- 启动时 `diskSchema < kPresetSchemaVersion(=7)`：用新版 defaults 覆盖所有 readonly；用户预设保留
 - 保存：`rename(.tmp → final)`；rename Access Denied（avast/Defender 抢锁）时 3 次重试 50 ms 间隔 + 原地 ofstream 覆写 fallback
 
 ---

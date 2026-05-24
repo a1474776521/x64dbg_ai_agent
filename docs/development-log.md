@@ -458,3 +458,53 @@ toolCallAccum[index].args   += delta.args   (拼接每块);
 - **K-05**：`TraceDialog::rebuildStackTree()` 末尾追加 `stackTree_->expandToDepth(2)`，CallStack 模式采样完成默认展开两层
 - **K-13**：`AssistantPanel` 加 `agentTerminalEventHandled_` 标志，`failed` / `maxIterReached` 路径置 true；`finished` 处理时若已置 true 跳过 `XAI_LOG_INFO("agent finished ...")` 冗余日志，但仍保险地调一次 `setAgentRunning(false)`（幂等）。
 - 三项都已在双架构 Release 重编通过；详见 `known-issues.md`。
+
+---
+
+## S0：自动化调试紧急修复（2026-05-24）
+
+> 触发：`docs/review-auto-debug.md` 给出 2 Critical + 1 High。本轮一次清完，建立 baseline tag `s0-baseline` → 推进到 `s0-done`。
+
+### 问题 S0-C1：CB_STOPDEBUG 双注册导致 ProjectContext.onDebugStop 丢失
+x64dbg SDK 的 `_plugin_registercallback` 对同 `(plugin, type)` 后注册者覆盖前注册者。`plugin_callbacks` 与 `trace_recorder` 都注册了 `CB_STOPDEBUG`，且 trace 在后，导致 `AssistantPanel::onDebugStopped` / `ProjectContext::onDebugStop` 永不触发。
+
+修复：
+- `src/plugin/plugin_callbacks.cpp::cbStopDebug` 改为单点分发，依次调用
+  - `AssistantPanel::onDebugStopped`
+  - `TraceRecorder::onStopDebug`
+  - `CallStackTracer::onStopDebug`
+  - `ProjectContext::onDebugStop`
+- `src/trace/trace_recorder.cpp` 移除 `CB_STOPDEBUG` 的 register/unregister，删去内部静态 `cbStopDebug` 函数。
+- `TraceRecorder::onStopDebug` / `CallStackTracer::onStopDebug` 原本已是 public 方法，零额外改动。
+
+### 问题 S0-C2：cbInitDebug 主线程同步 SHA256 + sqlite 阻塞 UI
+几百 MB 的 exe 在调试启动时，调试器主线程同步算 SHA256 → 打开 sqlite → 建表 / 写 meta，UI 卡 2–6 秒。
+
+修复（`src/storage/project_context.{h,cpp}`）：
+- `onDebugStart` 主线程部分：抢占 `generation_++`，清空 `store_` 与 `projectId_`，记录 `mainModulePath_`，置 `indexing_ = true`，立即返回。
+- 后台 detach 线程：算 SHA256 → 构造 `SessionStore` → 写 meta keys；落盘前后两次比较 `generation_`，若被新一轮 `onDebugStart` 或 `onDebugStop` 抢占就丢弃结果。
+- 新增 `isIndexing()` 供 UI 灰化 Agent 入口。
+- 所有消费者（24 处 `ProjectContext::instance().store()`）原本就 nullptr 软返回，零外部修改。
+
+`onDebugStop` 同样自增 `generation_`，使在途的 SHA256 线程到达落盘点时静默丢弃，避免"调试已停 store 又被装回"的回填竞态。
+
+### 问题 S0-H1：read_memory.size / get_disasm.lines 拒绝字符串化数字
+`is_number_integer()` 严格校验导致 LLM 传 `"size": "256"` 或 `"size": "0x100"` 时反复失败到 maxIter。
+
+修复（`src/ai/tools/basic_read_tools.cpp`）：
+- 新增 `parseInt32Lenient(json, lo, hi, out, err)`：接受 JSON number（含 float 截断）/ 十进制字符串 / `0x...` 十六进制字符串；clamp 到 `[lo, hi]`；错误消息显式包含范围。
+- `read_memory.size` 改用 `parseInt32Lenient(v, 1, 65536, ...)`。
+- `get_disasm.lines` 改用 `parseInt32Lenient(v, 1, 512, ...)`，原本就有 `std::clamp` 但不接受字符串，现统一。
+- `dynamic_context_tools.cpp` / `static_analysis_tools.cpp` 中 `max_frames` / `limit` / `top_k` / `max_results` 等可选 hint 参数走默认值兜底（字符串只导致回退到 default，不会让调用失败），属体验改进，列为 S1 顺手处理。
+
+### M-1 复核确认（已写入审查报告与 features/architecture）
+独立编出 `tools/probe_reasoning.exe`（不复用 `src/`，只 link cpr + nlohmann + Crypt32 + DPAPI），三轮请求 deepseek-reasoner：
+- ROUND1 普通请求：HTTP 200，content=3 字、reasoning=76 字。
+- GROUP_A 多轮回传 reasoning：HTTP 200。
+- GROUP_B 多轮剥离 reasoning：HTTP 200。
+
+结论：早期"必须回传 reasoning_content"的约束已被官方放宽。保留现有"回传"逻辑（兼容协议未来收紧 + 复用 UI 折叠面板），仅修正注释口径（`chat_provider.h:51-57`、`deepseek_chat_client.cpp:163-167`）。
+
+### 构建与验证
+- x64 / x86 双架构 Release 编通过：`build-x64/bin/Release/x64dbg_ai_plugin.dp64`、`build-x86/bin/Release/x64dbg_ai_plugin.dp32`。
+- Git baseline commit `2452f9b` + tag `s0-baseline`；S0 完成后另打 tag `s0-done`。

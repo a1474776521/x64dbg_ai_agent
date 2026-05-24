@@ -20,7 +20,13 @@
 
 ## 1. Critical Bugs（必修，全部带证据）
 
-### C-1 [Trace/Plugin] `CB_STOPDEBUG` 双注册导致 ProjectContext.onDebugStop 丢失
+### C-1 [Trace/Plugin] `CB_STOPDEBUG` 双注册导致 ProjectContext.onDebugStop 丢失 ✅ 已修 (2026-05-24)
+
+> 落地：`plugin_callbacks.cpp::cbStopDebug` 改为单点分发，依次调用
+> `AssistantPanel::onDebugStopped` → `TraceRecorder::onStopDebug` →
+> `CallStackTracer::onStopDebug` → `ProjectContext::onDebugStop`。
+> `trace_recorder.cpp` 已移除 `CB_STOPDEBUG` 的 register/unregister，
+> 同时删去内部静态 `cbStopDebug` 函数。详 development-log §S0-C1。
 
 **证据**
 
@@ -50,7 +56,14 @@
 
 ---
 
-### C-2 [Plugin] `cbInitDebug` 主线程同步 SHA256 + sqlite，阻塞调试器主线程
+### C-2 [Plugin] `cbInitDebug` 主线程同步 SHA256 + sqlite，阻塞调试器主线程 ✅ 已修 (2026-05-24)
+
+> 落地：`ProjectContext::onDebugStart` 内部异步化。
+> 主线程立即抢占 `generation_++` 并清空 `store_`/`projectId_`；
+> SHA256 + sqlite 打开 + meta 写在 detach 线程执行；
+> 完成前若被新一轮 `onDebugStart` 或 `onDebugStop` 抢占（generation_ 不匹配）则丢弃。
+> 新增 `isIndexing()` 供 UI 显示"指纹化中"占位。
+> 消费者读 `store()` 均已具备 nullptr 软返回。详 development-log §S0-C2。
 
 **证据**
 
@@ -71,7 +84,13 @@
 
 ## 2. High Bugs（强烈建议修）
 
-### H-1 [Tools] `read_memory` 拒绝字符串化整数，LLM 反复失败到 maxIter
+### H-1 [Tools] `read_memory` 拒绝字符串化整数，LLM 反复失败到 maxIter ✅ 已修 (2026-05-24)
+
+> 落地：`basic_read_tools.cpp` 新增 `parseInt32Lenient(v, lo, hi, out, err)`，
+> 支持 JSON number / 十进制字符串 / `0x...` 十六进制字符串，clamp 到 `[lo, hi]`，
+> 错误消息明确范围。`read_memory.size` 改用 `[1, 65536]`；
+> `get_disasm.lines` 改用 `[1, 512]`。其他可选 hint 参数（max_frames/limit/top_k 等）
+> 走默认值兜底，体验改进留 S1 顺手处理。详 development-log §S0-H1。
 
 **证据**
 
@@ -346,7 +365,7 @@ Agent 无法 patch 内存、改寄存器、下断点 → 无法做"自动二分�
 
 | 阶段 | 工作量 | 内容 |
 |---|---|---|
-| **S0 紧急修复** | 0.5–1 day | C-1 / C-2 / H-1 三条，无新功能 |
+| **S0 紧急修复** ✅ | 0.5–1 day | C-1 / C-2 / H-1 三条，无新功能（2026-05-24 完成） |
 | **S1 读类工具补全** | 1–2 day | T-11/T-12/T-13/T-14（全只读，零风险） |
 | **S2 EventBus + wait_for_event** | 2–3 day | A-1 + T-06，架构改造，trace_recorder 迁移 |
 | **S3 P0 写控制工具** | 2–3 day | T-01..T-05 + ToolPolicy 框架（A-2） |

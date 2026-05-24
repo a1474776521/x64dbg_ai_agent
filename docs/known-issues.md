@@ -101,6 +101,18 @@
 - **影响**：低；用户可在 plugin.log 里找全文
 - **位置**：`src/ui/chat_view.cpp` ReasoningBlock 定义
 
+### K-15：CB_STOPDEBUG 双注册（C-1）✅ 已修复
+- **状态**：S0 修复，详 development-log §S0-C1
+- **位置**：`src/plugin/plugin_callbacks.cpp:29-56`、`src/trace/trace_recorder.cpp:47-49,65-85`
+
+### K-16：cbInitDebug 同步 SHA256 阻塞 UI（C-2）✅ 已修复
+- **状态**：S0 修复，detach 线程 + generation 抢占语义，详 development-log §S0-C2
+- **位置**：`src/storage/project_context.{h,cpp}`
+
+### K-17：tools 入参拒绝字符串化数字（H-1）✅ 已修复
+- **状态**：S0 修复 `read_memory.size` / `get_disasm.lines`；dynamic_context / static_analysis 的可选 hint 参数走默认值兜底，S1 顺手统一
+- **位置**：`src/ai/tools/basic_read_tools.cpp::parseInt32Lenient`
+
 ---
 
 ## ⚪ 未支持（设计取舍，不是 bug）

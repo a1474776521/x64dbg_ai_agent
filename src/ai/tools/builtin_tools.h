@@ -35,4 +35,8 @@ void registerDebugWriteTools(ToolRegistry& reg);
 // 全部 requiresUserConfirmation()==true + category()==Write
 void registerDataWriteTools(ToolRegistry& reg);
 
+// 在 reg 中注册脚本工具（S5 / W-1..W-3）：
+//   list_scripts (Read) / load_script (Write) / run_script_file (Write)
+void registerScriptTools(ToolRegistry& reg);
+
 }  // namespace x64ai

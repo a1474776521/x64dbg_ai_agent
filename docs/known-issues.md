@@ -144,6 +144,15 @@
 - **影响**：低；当前架构安全。但后续若加"批量执行多个工具的进度对话框 + 取消"需特别小心
 - **位置**：`src/ui/tool_confirm_dialog.cpp::confirmFromBackground`
 
+### K-22：run_script_file 无法同步等待脚本结束（S5）
+- **现象**：x64dbg SDK 的 `DbgScriptRun(destline)` 异步触发脚本执行，没有"finished" 事件 / 回调
+- **后果**：`run_script_file` 只能 fire-and-forget；agent 调完该工具立刻返回 started=true，无法在工具结果里反映脚本是否成功
+- **缓解**：description 明确告知 agent 用 `wait_for_event(Paused/Breakpoint)` 或后续 `get_registers/read_memory` 观察副作用
+- **若脚本死循环**：需用户手工在 x64dbg Script 标签页按 Abort，或 agent 调 `run_dbg_command("StopDebug")`
+- **影响**：中；要求 agent prompt 里教会 LLM 这个模式（已在 system prompt 的 tool description 体现）
+- **位置**：`src/ai/tools/script_tools.cpp::RunScriptFileTool`
+- **可能改进**：x64dbg 有 `CB_SCRIPTFINISHED` 之类回调吗？需进一步调研 `_plugin_registercallback` 列表
+
 ---
 
 ## ⚪ 未支持（设计取舍，不是 bug）

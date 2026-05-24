@@ -24,6 +24,9 @@ std::filesystem::path pluginProjectsDir();
 // %APPDATA%/x64dbg-ai-plugin/projects/<sha256>.db
 std::filesystem::path projectDbPath(const std::string& sha256Hex);
 
+// %APPDATA%/x64dbg-ai-plugin/scripts/  （S5：agent 可用脚本目录；首次访问自动建）
+std::filesystem::path pluginScriptsDir();
+
 // %USERPROFILE%/.config/github-copilot/  (与 VS Code Copilot / gh / OpenCode 共享)
 std::filesystem::path copilotAuthDir();
 

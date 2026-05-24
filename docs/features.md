@@ -238,7 +238,8 @@
 | `%APPDATA%\x64dbg-ai-plugin\logs\plugin.log` | spdlog 文件输出 | `XAI_LOG_*` 宏 |
 | `%APPDATA%\x64dbg-ai-plugin\logs\write_audit.log` | S3 写工具审计（JSON 一行一条；rotating 4 MB×10） | `util/logging.cpp::auditLog` |
 | `%APPDATA%\x64dbg-ai-plugin\projects\<sha>.db` | 会话 + RAG 数据库 | `SessionStore` |
-| `%APPDATA%\x64dbg-ai-plugin\agent_presets.json` | Agent 预设（schemaVersion=8，S4 后 analyze-function 含全部 9 个写工具） | `PresetStore` |
+| `%APPDATA%\x64dbg-ai-plugin\agent_presets.json` | Agent 预设（schemaVersion=9，S5 后 analyze-function 含全部 9 个写工具 + 3 个脚本工具） | `PresetStore` |
+| `%APPDATA%\x64dbg-ai-plugin\scripts\` | S5 agent 脚本目录；`list_scripts` / `load_script` / `run_script_file` 相对路径基准 | `util/paths.cpp::pluginScriptsDir` |
 | `%APPDATA%\x64dbg-ai-plugin\secrets\*.bin` | DPAPI 加密的 token/key | `SecretStore` |
 
 ### HTTP 超时（M3.3 修复后）
@@ -284,7 +285,7 @@
 
 LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什么、再算什么、何时回答"。
 
-### 工具清单（S4 后 24 个：14 个只读 + 1 个控制 + 9 个写）
+### 工具清单（S5 后 27 个：15 个只读 + 1 个控制 + 11 个写）
 
 | 类别 | 工具 | 说明 |
 |---|---|---|
@@ -311,6 +312,9 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 | **S4 数据写**（全部 category=Write + 5s confirm + audit） | `patch_memory(addr, bytes_hex)` | 写 hex 字节流；接受 "DE AD BE EF" / "deadbeef" / "DE,AD,BE,EF"；4 KB 上限；写前按 4 KB 步进 + 末字节做 `DbgMemIsValidReadPtr` 越界检查；`DbgMemWrite` 失败时报具体 VA |
 |  | `set_register(name, value)` | 写 GPR / DR / EFLAGS / Cxx 别名；名表 90+ 条（含 R8B/R9W/SIL/SPL 等子寄存器；x86/x64 条件编译）；按 byteWidth 校验 value 范围（写 AL 超 0xFF 直接拒）；XMM/YMM/MXCSR/FPU 不支持 |
 |  | `write_string(addr, value, encoding=utf8\|utf16le\|ascii)` | 默认 utf8；ascii 拒绝 >0x7F 字节避免静默 mojibake；utf16le 先 `MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS)` 解码再按 2 字节 LE 输出；自动追加正确长度的 \0 终止；编码后硬上限 8 KB |
+| **S5 脚本**（list_scripts 是 Read；其余 Write + 5s confirm + audit） | `list_scripts()` | 枚举 `%APPDATA%\x64dbg-ai-plugin\scripts\` 下 *.txt / *.script；返回 name/size_bytes/mtime_ms |
+|  | `load_script(path)` | 加载到 Script tab 但不执行；相对路径接 scripts 目录，绝对路径直接用；1 MB 上限；只接受 .txt / .script 扩展 |
+|  | `run_script_file(path)` | 加载 + 触发 Run（fire-and-forget）；x64dbg script 引擎没暴露"完成"事件，agent 想观察结果需用 wait_for_event(Paused/Breakpoint) 或后续工具查状态 |
 
 ### ToolPolicy 三档（S3）
 
@@ -405,14 +409,14 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 
 ```json
 {
-  "schemaVersion": 8,
+  "schemaVersion": 9,
   "presets": [{ "id": "...", "name": "...", "systemPrompt": "...", "userTemplate": "...",
                 "enabledTools": ["..."], "maxIter": 20, "temperature": 0.2,
                 "provider": "deepseek", "model": "", "showInContextMenu": true, "readonly": true }]
 }
 ```
 
-- 启动时 `diskSchema < kPresetSchemaVersion(=8)`：用新版 defaults 覆盖所有 readonly；用户预设保留
+- 启动时 `diskSchema < kPresetSchemaVersion(=9)`：用新版 defaults 覆盖所有 readonly；用户预设保留
 - 保存：`rename(.tmp → final)`；rename Access Denied（avast/Defender 抢锁）时 3 次重试 50 ms 间隔 + 原地 ofstream 覆写 fallback
 
 ---

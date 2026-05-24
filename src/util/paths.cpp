@@ -53,6 +53,12 @@ fs::path projectDbPath(const std::string& sha256Hex) {
     return pluginProjectsDir() / (sha256Hex + ".db");
 }
 
+fs::path pluginScriptsDir() {
+    auto p = pluginRootDir() / "scripts";
+    ensureDir(p);
+    return p;
+}
+
 fs::path copilotAuthDir() {
     auto p = getEnvPath("USERPROFILE") / ".config" / "github-copilot";
     ensureDir(p);

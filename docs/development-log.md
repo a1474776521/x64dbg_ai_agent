@@ -691,3 +691,35 @@ x64dbg SDK 的 `_plugin_registercallback` 对同 `(plugin, type)` 后注册者�
 - **set_register 不做 EFLAGS 位运算辅助**：传完整的 32/64 位值；位操作让 agent 用 `eval_expression` 算好再传。简化白名单维护。
 - **XMM/AVX 不做**：x64dbg Script API 没暴露 setter；后期如需要必须走 `DbgValToString`/`DbgValFromString` + 命令字符串，复杂度高。
 
+
+## S5：脚本工具三件套 list_scripts / load_script / run_script_file（2026-05-24）
+
+> 目标：把 x64dbg 的 Script 子系统暴露给 agent，让 LLM 能挂载用户预写的脚本做批量自动化（解密循环、批量补丁、自动化探测等）。
+> 沿用 S3 的 ToolPolicy + 5s confirm + 双相 audit 闭环；脚本目录约定在 `%APPDATA%\x64dbg-ai-plugin\scripts\`。
+
+### 工具
+- `list_scripts()` — category=Read。枚举 scripts/ 下 *.txt / *.script，返回 name / size_bytes / mtime_ms。
+- `load_script(path)` — category=Write + confirm。`DbgScriptUnload` + `DbgScriptLoad`，加载但不执行。
+- `run_script_file(path)` — category=Write + confirm。Load + `DbgScriptRun(0)`，fire-and-forget。
+
+### 路径与限制
+- 相对路径 → 接 `pluginScriptsDir()`；绝对路径直接用（confirm 弹窗能让用户看到完整路径）。
+- 仅接受 `.txt` / `.script` 扩展，1 MB 上限。
+- 文件 mtime 转 UNIX ms：用 Win32 `GetFileAttributesExW` + FILETIME→epoch 偏移（116444736000000000 个 100ns），绕开 MSVC `file_clock::to_sys` / `clock_cast` 兼容坑。
+
+### 设计取舍
+- **run_script_file 不能同步等待**：x64dbg SDK 的 `DbgScriptRun` 异步且无完成事件，所以工具立刻 return started=true。description 教 LLM 用 `wait_for_event(Paused/Breakpoint)` 或后续 `get_registers/read_memory` 观察副作用。已记 K-22。
+- **load_script 单独存在**：让 agent 可以"先加载、人工预览、再 Run"，对高风险脚本多一道保险。
+- **list_scripts 只列文件名 + meta，不读内容**：内容预览交给现有 host 文件系统能力（或后续可加 read_script_text，但本阶段不做）。
+- **未引入 save_script**：目前没有 agent 写脚本的需求；如需要可后续加 W-4，做 sandbox + size cap。
+
+### S5-A 集成
+- `ai/tools/script_tools.cpp` 新建；`util/paths.{h,cpp}` 加 `pluginScriptsDir()`。
+- `builtin_tools.h` 暴露 `registerScriptTools`；`tool_registry.cpp::registerBuiltinTools` 注册。
+- `src/CMakeLists.txt` PLUGIN_SOURCES 追加。
+- `kPresetSchemaVersion` 8 → 9；`analyze-function` 白名单追加三件套（其他静态分析预设不开脚本）。
+
+### S5-B 构建
+- 双架构 Release 编译通过，零警告。dp64 / dp32 已就位。
+- 工具总数：14 读 + 1 控制 + 9 写（S3+S4）+ 3 脚本（S5，含 1 读 + 2 写）= **27 工具**（15 读 / 1 控制 / 11 写）。
+- Git tag：`s5-done`。

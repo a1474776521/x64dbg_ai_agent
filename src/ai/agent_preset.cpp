@@ -160,7 +160,9 @@ std::vector<AgentPreset> defaultPresets()
             "set_breakpoint","remove_breakpoint","step_in","step_over","run_until",
             "run_dbg_command",
             // S4：数据写
-            "patch_memory","set_register","write_string"
+            "patch_memory","set_register","write_string",
+            // S5：脚本
+            "list_scripts","load_script","run_script_file"
         };
         v.push_back(std::move(p));
     }

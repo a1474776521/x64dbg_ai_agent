@@ -650,3 +650,44 @@ x64dbg SDK 的 `_plugin_registercallback` 对同 `(plugin, type)` 后注册者�
 - **wait_for_event 不弹 confirm**：它本质是只读（agent 等下次中断信号），但占用执行流且涉及 cancelFlag 通信，需要 audit 追踪 agent 是否合理使用（不要被 LLM 当 polling 用）。
 - **审计 sink 单独 logger 而非给 plugin.log 加 tag**：JSON 一行一条要求 pattern 是裸 `%v`，与 plugin.log 的 `[ts] [tid] [lvl] %v` 冲突；分离最清爽。
 
+---
+
+## S4：数据写工具三件套 patch_memory / set_register / write_string（2026-05-24）
+
+> 目标：补齐内存补丁、寄存器修改、字符串写入；让 agent 真正能改运行时状态。沿用 S3 的 ToolPolicy/confirm/audit 闭环，无新基础设施。
+
+### S4-A patch_memory
+- 入参：`addr` + `bytes_hex`；hex 解析支持 `DE AD BE EF` / `deadbeef` / `DE,AD,BE,EF` / `de:ad:be:ef` / `de-ad` 多种分隔；不允许通配符（精确写入）。
+- 越界检查：4 KB 步进 + 末字节 `DbgMemIsValidReadPtr`，避免跨页 partial write。
+- 写入上限：4 KB（防 prompt 注入超大写）。
+- `DbgMemWrite` 直调；失败时报具体 VA 和 size。
+- audit data_snippet 含 `bytes_pretty="DE AD BE EF...(+N)"` 便于事后核对。
+
+### S4-B set_register
+- 新建寄存器名表 `regTable()`：90+ 条，含 GPR / 子寄存器（AL/AH/AX/EAX/RAX 等，含 R8B/R9W/SIL/SPL/BPL/DIL）/ DR0-DR7 / EFLAGS / 架构无关别名 Cxx。x86 / x64 用 `#ifdef _WIN64` 条件编译。
+- 不支持：XMM/YMM/MXCSR/FPU（`Script::Register::Set` 没暴露入口）。
+- byteWidth 校验：写 AL 传 0x100 直接拒，避免静默 truncate。
+- name 大小写不敏感（`rax` / `RAX` / `Rax` 等价）。
+
+### S4-C write_string
+- 三种编码：`utf8`（默认）/ `utf16le` / `ascii`。
+- ASCII 路径拒绝 >0x7F 字节，避免静默 mojibake（用户传中文必须显式 utf8/utf16le）。
+- UTF-16LE 路径用 `MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS)` 先解码再按 2 字节 LE 输出；非法 UTF-8 直接报错。
+- 自动追加正确长度的 `\0` 终止（1 byte / 2 byte）。
+- 编码后硬上限 8 KB；源串上限 4 KB。
+- audit data_snippet 含前 80 字符 `value_preview` 便于复盘。
+
+### S4-D/E 集成
+- `ai/tools/data_write_tools.cpp` 新建；`builtin_tools.h` 暴露 `registerDataWriteTools`；`tool_registry.cpp::registerBuiltinTools` 注册。
+- `src/CMakeLists.txt` PLUGIN_SOURCES 追加。
+- `kPresetSchemaVersion` 7 → 8；`analyze-function` 白名单追加三件套。其他 3 个静态分析预设保持精简，不开数据写。
+
+### S4-F 构建
+- 双架构 Release 编译通过，零警告。dp64/dp32 已就位。
+- Git tag：`s4-done`。
+
+### 设计取舍
+- **patch_memory 与 write_string 都用 `DbgMemWrite`**：底层同一 API；write_string 只是预处理编码 + 自动 \0。理论上可让 agent 用 patch_memory 自己组字节，但 write_string 让 `encoding` 显式化，audit 日志可读性更强（`encoding=utf16le` 一眼看出意图）。
+- **set_register 不做 EFLAGS 位运算辅助**：传完整的 32/64 位值；位操作让 agent 用 `eval_expression` 算好再传。简化白名单维护。
+- **XMM/AVX 不做**：x64dbg Script API 没暴露 setter；后期如需要必须走 `DbgValToString`/`DbgValFromString` + 命令字符串，复杂度高。
+

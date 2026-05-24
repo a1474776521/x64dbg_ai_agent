@@ -158,7 +158,9 @@ std::vector<AgentPreset> defaultPresets()
             "eval_expression","list_breakpoints","wait_for_event",
             // S3：调试控制 + 写
             "set_breakpoint","remove_breakpoint","step_in","step_over","run_until",
-            "run_dbg_command"
+            "run_dbg_command",
+            // S4：数据写
+            "patch_memory","set_register","write_string"
         };
         v.push_back(std::move(p));
     }

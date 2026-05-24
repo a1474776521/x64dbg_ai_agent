@@ -30,4 +30,9 @@ void registerDebugControlTools(ToolRegistry& reg);
 // 全部 requiresUserConfirmation()==true + category()==Write
 void registerDebugWriteTools(ToolRegistry& reg);
 
+// 在 reg 中注册数据写工具（S4 / T-07..T-09）：
+//   patch_memory / set_register / write_string
+// 全部 requiresUserConfirmation()==true + category()==Write
+void registerDataWriteTools(ToolRegistry& reg);
+
 }  // namespace x64ai

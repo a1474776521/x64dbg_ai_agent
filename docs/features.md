@@ -238,7 +238,7 @@
 | `%APPDATA%\x64dbg-ai-plugin\logs\plugin.log` | spdlog 文件输出 | `XAI_LOG_*` 宏 |
 | `%APPDATA%\x64dbg-ai-plugin\logs\write_audit.log` | S3 写工具审计（JSON 一行一条；rotating 4 MB×10） | `util/logging.cpp::auditLog` |
 | `%APPDATA%\x64dbg-ai-plugin\projects\<sha>.db` | 会话 + RAG 数据库 | `SessionStore` |
-| `%APPDATA%\x64dbg-ai-plugin\agent_presets.json` | Agent 预设（schemaVersion=7，S3 后加入 6 个写工具到 analyze-function） | `PresetStore` |
+| `%APPDATA%\x64dbg-ai-plugin\agent_presets.json` | Agent 预设（schemaVersion=8，S4 后 analyze-function 含全部 9 个写工具） | `PresetStore` |
 | `%APPDATA%\x64dbg-ai-plugin\secrets\*.bin` | DPAPI 加密的 token/key | `SecretStore` |
 
 ### HTTP 超时（M3.3 修复后）
@@ -284,7 +284,7 @@
 
 LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什么、再算什么、何时回答"。
 
-### 工具清单（S3 后 21 个：14 个只读 + 1 个控制 + 6 个写）
+### 工具清单（S4 后 24 个：14 个只读 + 1 个控制 + 9 个写）
 
 | 类别 | 工具 | 说明 |
 |---|---|---|
@@ -308,6 +308,9 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 |  | `step_over(timeout_ms=30000)` | 同上，`StepOver` |
 |  | `run_until(addr, timeout_ms=30000)` | `DbgCmdExecDirect("bp 0x.., ss")` 装 one-shot 断点 + `run` + waitForStop；timeout 路径兜底 `DeleteBreakpoint` 清理 |
 |  | `run_dbg_command(command)` | 命令逃生口；首 token（按空白/逗号切）小写后查 15 token 白名单：`bp/bpc/bphwc/bpd/bpe` + `run/stepinto/stepover/stepout/pause` + `db/dw/dd/dq`；非白名单直接 deny + warn |
+| **S4 数据写**（全部 category=Write + 5s confirm + audit） | `patch_memory(addr, bytes_hex)` | 写 hex 字节流；接受 "DE AD BE EF" / "deadbeef" / "DE,AD,BE,EF"；4 KB 上限；写前按 4 KB 步进 + 末字节做 `DbgMemIsValidReadPtr` 越界检查；`DbgMemWrite` 失败时报具体 VA |
+|  | `set_register(name, value)` | 写 GPR / DR / EFLAGS / Cxx 别名；名表 90+ 条（含 R8B/R9W/SIL/SPL 等子寄存器；x86/x64 条件编译）；按 byteWidth 校验 value 范围（写 AL 超 0xFF 直接拒）；XMM/YMM/MXCSR/FPU 不支持 |
+|  | `write_string(addr, value, encoding=utf8\|utf16le\|ascii)` | 默认 utf8；ascii 拒绝 >0x7F 字节避免静默 mojibake；utf16le 先 `MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS)` 解码再按 2 字节 LE 输出；自动追加正确长度的 \0 终止；编码后硬上限 8 KB |
 
 ### ToolPolicy 三档（S3）
 
@@ -402,14 +405,14 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 
 ```json
 {
-  "schemaVersion": 7,
+  "schemaVersion": 8,
   "presets": [{ "id": "...", "name": "...", "systemPrompt": "...", "userTemplate": "...",
                 "enabledTools": ["..."], "maxIter": 20, "temperature": 0.2,
                 "provider": "deepseek", "model": "", "showInContextMenu": true, "readonly": true }]
 }
 ```
 
-- 启动时 `diskSchema < kPresetSchemaVersion(=7)`：用新版 defaults 覆盖所有 readonly；用户预设保留
+- 启动时 `diskSchema < kPresetSchemaVersion(=8)`：用新版 defaults 覆盖所有 readonly；用户预设保留
 - 保存：`rename(.tmp → final)`；rename Access Denied（avast/Defender 抢锁）时 3 次重试 50 ms 间隔 + 原地 ofstream 覆写 fallback
 
 ---

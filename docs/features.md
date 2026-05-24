@@ -283,21 +283,23 @@
 
 LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什么、再算什么、何时回答"。
 
-### 工具清单（12 个，全部只读 + 无状态）
+### 工具清单（S1 后 14 个，全部只读 + 无状态）
 
 | 类别 | 工具 | 说明 |
 |---|---|---|
-| 基础读取 | `read_memory(addr, size)` | 单次返回硬截断 64 KB；超限自动 truncated 标记 |
+| 基础读取 | `read_memory(addr, size)` | 单次返回硬截断 64 KB；超限自动 truncated 标记。S0-H1 后 `size` 接受 number / "256" / "0x100" |
 |  | `read_string(addr, max_len, encoding)` | ASCII/UTF-8/UTF-16 |
 |  | `get_registers()` | 当前线程通用寄存器快照 |
 |  | `get_module_info(name_or_addr)` | base / size / entry / pdb 路径 |
 |  | `list_modules()` | 进程内全部已加载模块 |
-| 静态分析 | `disasm_at(addr, count)` | 反汇编 N 条 |
+| 静态分析 | `disasm_at(addr, count)` | 反汇编 N 条；S0-H1 后 `lines` 接受 number/字符串 |
 |  | `list_functions(module)` | 已识别函数列表 |
 |  | `list_xrefs_to(addr)` / `list_xrefs_from(addr)` | x64dbg 内部 X-Ref 表 |
 |  | `find_pattern(pattern, module?)` | x64dbg 风格 `?` 通配 |
 | 动态上下文 | `get_call_stack()` | 当前线程 unwound frames（RtlVirtualUnwind） |
 |  | `get_thread_list()` | 当前进程线程列表 |
+| **S1 新增** | `eval_expression(expr)` | 把 `[rbp+8]+10`、`kernel32.GetProcAddress` 等交给 `DbgEval` 求值，返回 hex+dec |
+|  | `list_breakpoints(type?)` | 列出 software/hardware/memory/dll/exception 断点，每条含 addr/enabled/active/hitCount/mod/name；硬上限 1024 条 |
 
 ### Agent loop
 

@@ -508,3 +508,37 @@ x64dbg SDK 的 `_plugin_registercallback` 对同 `(plugin, type)` 后注册者�
 ### 构建与验证
 - x64 / x86 双架构 Release 编通过：`build-x64/bin/Release/x64dbg_ai_plugin.dp64`、`build-x86/bin/Release/x64dbg_ai_plugin.dp32`。
 - Git baseline commit `2452f9b` + tag `s0-baseline`；S0 完成后另打 tag `s0-done`。
+
+---
+
+## S1：纯读工具补全（2026-05-24）
+
+> 触发：审查报告 §5 P2 列出 T-11..T-14；核对源码后 T-13 `get_registers`（basic_read_tools.cpp:378）与 T-14 `get_callstack`（dynamic_context_tools.cpp:77）已存在且实现合理，S1 实际只需补 T-11 / T-12。
+
+### T-11 `eval_expression`
+- 入口：`DbgEval(expr, &ok)`（`bridgemain.h:1239`）。
+- 入参：`expr`（必填 string，1–512 字符）。
+- 返回：`{expr, value: "0x...", value_dec: "..."}`。
+- 失败语义：`DbgEval` 内部失败 → `r.ok=false, r.error="expression evaluation failed: <expr>"`，不抛异常。
+- 用例：LLM 让"读 [rbp+8] 的指针所指的字符串"先 `eval_expression("[rbp+8]")` 拿到地址再 `read_string`。
+- 位置：`src/ai/tools/basic_read_tools.cpp` EvalExpressionTool。
+
+### T-12 `list_breakpoints`
+- 入口：`DbgGetBpList(BPXTYPE, BPMAP*)`（`bridgemain.h:1162`）+ `BridgeFree`。
+- 入参：`type`（可选 string："all"|"software"|"hardware"|"memory"|"dll"|"exception"，默认 all）。
+- 返回字段：`{count, truncated, breakpoints:[{type, addr, enabled, active, singleshoot, hitCount, mod, name}]}`。
+- 硬上限：1024 条，超出 `truncated=true`，防止 trace 断点把 LLM 灌爆。
+- 位置：`src/ai/tools/basic_read_tools.cpp` ListBreakpointsTool。
+- maxResultBytes：64 KB（与 list_modules 持平）。
+
+### 预设白名单 + schema v5
+- `analyze-function` / `who-calls-here` 两个最相关的预设白名单追加 `eval_expression` / `list_breakpoints`。
+- "解释此处"（explain-here）保持精简不变。
+- `agent_preset.h::kPresetSchemaVersion` 4 → 5，让现存用户的旧 preset.json 在下次启动触发"覆盖 readonly=true 项、保留用户自定义"逻辑，无缝吃到新工具。
+
+### 测试
+- x64 / x86 双架构 Release 编通过。
+- Agent 实测留作 S0+S1 端到端验证（参见后续"S1 烟测"小节，目前未执行）。
+- Git tag：`s1-done`。
+
+> 关于 P2 体验改进 K-17 残余项：`dynamic_context_tools.cpp` 的 `max_frames`、`limit`、`top_k`，以及 `static_analysis_tools.cpp` 的 `max_results`，目前 `is_number_integer()` 严格但默认值兜底（字符串只是不生效），不构成 bug，留 S2 顺手统一为 `parseInt32Lenient`。

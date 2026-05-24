@@ -1,11 +1,13 @@
 // ai/tools/basic_read_tools.cpp
 //
-// M4.4a 基础读取工具集（5 个，纯只读）：
-//   - get_disasm      反汇编指定地址附近 N 行
-//   - read_memory     读裸内存（hex+ascii dump）
-//   - read_string     读 C 字符串（自动判 ANSI / UTF-16）
-//   - get_registers   当前线程寄存器快照
-//   - list_modules    已加载模块列表
+// M4.4a 基础读取工具集（纯只读）：
+//   - get_disasm        反汇编指定地址附近 N 行
+//   - read_memory       读裸内存（hex+ascii dump）
+//   - read_string       读 C 字符串（自动判 ANSI / UTF-16）
+//   - get_registers     当前线程寄存器快照
+//   - list_modules      已加载模块列表
+//   - eval_expression   (S1, T-11) 求值 x64dbg 表达式
+//   - list_breakpoints  (S1, T-12) 列出所有断点
 //
 // 所有工具：
 //   - DbgIsDebugging()==false 时直接返回 ok=false
@@ -492,6 +494,173 @@ public:
     }
 };
 
+// ====== eval_expression (S1, T-11) ======
+//
+// 让 LLM 把 x64dbg 表达式（"[rbp+8]+10"、"GetProcAddress"、"401000+30" 等）交给
+// 原生求值器，避免它自己做不靠谱的整数运算。
+//
+// 返回字段：
+//   value      —— 0x 前缀十六进制
+//   value_dec  —— 十进制（便于 LLM 直接判定大小 / 是否合理）
+//   expr       —— 回显输入
+class EvalExpressionTool : public ITool {
+public:
+    std::string name() const override { return "eval_expression"; }
+    std::string description() const override
+    {
+        return "Evaluate an x64dbg expression in the debuggee's context. "
+               "Accepts arithmetic (+ - * /), dereference '[expr]', registers (rax/eip), "
+               "module-relative symbols (kernel32.GetProcAddress), and hex/decimal literals. "
+               "Use this whenever you need to compute an address or read a small typed value "
+               "instead of doing math yourself.";
+    }
+    nlohmann::json parametersSchema() const override
+    {
+        return {
+            {"type", "object"},
+            {"properties", {
+                {"expr", {
+                    {"type", "string"},
+                    {"description", "x64dbg expression, e.g. '[rbp+8]', 'kernel32.GetProcAddress', '401000+30'"},
+                }},
+            }},
+            {"required", nlohmann::json::array({"expr"})},
+        };
+    }
+
+    ToolResult invoke(const nlohmann::json& args, ToolContext& ctx) override
+    {
+        ToolResult r;
+        if (!ctx.debuggerActive || !DbgIsDebugging()) {
+            r.ok = false; r.error = "debugger is not active";
+            return r;
+        }
+        if (!args.contains("expr") || !args["expr"].is_string()) {
+            r.ok = false; r.error = "'expr' is required (string)";
+            return r;
+        }
+        const std::string expr = args["expr"].get<std::string>();
+        if (expr.empty() || expr.size() > 512) {
+            r.ok = false; r.error = "'expr' length out of range [1, 512]";
+            return r;
+        }
+
+        bool  ok    = false;
+        duint value = DbgEval(expr.c_str(), &ok);
+        if (!ok) {
+            r.ok    = false;
+            r.error = "expression evaluation failed: " + expr;
+            return r;
+        }
+
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%llu",
+                      static_cast<unsigned long long>(value));
+        r.data = {
+            {"expr",      expr},
+            {"value",     formatHexVa(static_cast<std::uint64_t>(value))},
+            {"value_dec", buf},
+        };
+        return r;
+    }
+};
+
+// ====== list_breakpoints (S1, T-12) ======
+//
+// 列出所有当前安装的断点（normal / hardware / memory / dll / exception）。
+// 每条返回 type / addr / enabled / active / singleshoot / hitCount / mod / name。
+// "active" 在 x64dbg 中表示断点字节当前是否真正生效（被 step-over 临时禁用时 false）。
+//
+// 输出条数硬上限 1024，超出截断（防止极端用户开几万条 trace 断点把 LLM 灌穿）。
+class ListBreakpointsTool : public ITool {
+public:
+    std::string name() const override { return "list_breakpoints"; }
+    std::string description() const override
+    {
+        return "List all installed breakpoints (software, hardware, memory, DLL, exception). "
+               "Returns address, type, enabled/active state, hit count, module and name. "
+               "Use this to confirm a breakpoint was set, audit existing breakpoints, "
+               "or pick one to delete.";
+    }
+    nlohmann::json parametersSchema() const override
+    {
+        return {
+            {"type", "object"},
+            {"properties", {
+                {"type", {
+                    {"type", "string"},
+                    {"description",
+                     "Filter by type: 'all' (default) | 'software' | 'hardware' | 'memory' | 'dll' | 'exception'"},
+                }},
+            }},
+        };
+    }
+    std::size_t maxResultBytes() const override { return 64 * 1024; }
+
+    ToolResult invoke(const nlohmann::json& args, ToolContext& ctx) override
+    {
+        ToolResult r;
+        if (!ctx.debuggerActive || !DbgIsDebugging()) {
+            r.ok = false; r.error = "debugger is not active";
+            return r;
+        }
+
+        std::string filter = "all";
+        if (args.contains("type") && args["type"].is_string()) {
+            filter = args["type"].get<std::string>();
+        }
+
+        struct Cat { const char* name; BPXTYPE type; };
+        const Cat all[] = {
+            {"software",  bp_normal},
+            {"hardware",  bp_hardware},
+            {"memory",    bp_memory},
+            {"dll",       bp_dll},
+            {"exception", bp_exception},
+        };
+
+        nlohmann::json items = nlohmann::json::array();
+        int totalEmitted = 0;
+        bool truncated  = false;
+        const int kHardCap = 1024;
+
+        for (const auto& c : all) {
+            if (filter != "all" && filter != c.name) continue;
+
+            BPMAP bplist{};
+            if (!DbgGetBpList(c.type, &bplist) || !bplist.bp || bplist.count <= 0) {
+                if (bplist.bp) BridgeFree(bplist.bp);
+                continue;
+            }
+            for (int i = 0; i < bplist.count && !truncated; ++i) {
+                const auto& bp = bplist.bp[i];
+                items.push_back({
+                    {"type",        c.name},
+                    {"addr",        formatHexVa(static_cast<std::uint64_t>(bp.addr))},
+                    {"enabled",     bp.enabled},
+                    {"active",      bp.active},
+                    {"singleshoot", bp.singleshoot},
+                    {"hitCount",    bp.hitCount},
+                    {"mod",         bp.mod},
+                    {"name",        bp.name},
+                });
+                if (++totalEmitted >= kHardCap) {
+                    truncated = true;
+                }
+            }
+            BridgeFree(bplist.bp);
+            if (truncated) break;
+        }
+
+        r.data = {
+            {"count",       totalEmitted},
+            {"truncated",   truncated},
+            {"breakpoints", std::move(items)},
+        };
+        return r;
+    }
+};
+
 }  // namespace
 
 void registerBasicReadTools(ToolRegistry& reg)
@@ -501,6 +670,8 @@ void registerBasicReadTools(ToolRegistry& reg)
     reg.registerTool(std::make_unique<ReadStringTool>());
     reg.registerTool(std::make_unique<GetRegistersTool>());
     reg.registerTool(std::make_unique<ListModulesTool>());
+    reg.registerTool(std::make_unique<EvalExpressionTool>());
+    reg.registerTool(std::make_unique<ListBreakpointsTool>());
 }
 
 }  // namespace x64ai

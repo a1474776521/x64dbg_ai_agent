@@ -154,7 +154,8 @@ std::vector<AgentPreset> defaultPresets()
         p.enabledTools = {
             "get_disasm","read_memory","read_string","get_registers","list_modules",
             "find_xrefs_to","get_function_range","search_pattern",
-            "get_callstack","trace_query","locate_api_callers","rag_search"
+            "get_callstack","trace_query","locate_api_callers","rag_search",
+            "eval_expression","list_breakpoints"
         };
         v.push_back(std::move(p));
     }
@@ -187,7 +188,8 @@ std::vector<AgentPreset> defaultPresets()
             "Report each caller's function and the relevant disassembly snippet.";
         p.enabledTools = {
             "find_xrefs_to","get_disasm","get_function_range",
-            "get_callstack","trace_query","rag_search"
+            "get_callstack","trace_query","rag_search",
+            "eval_expression","list_breakpoints"
         };
         v.push_back(std::move(p));
     }

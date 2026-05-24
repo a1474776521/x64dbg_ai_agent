@@ -274,13 +274,13 @@ Agent 无法 patch 内存、改寄存器、下断点 → 无法做"自动二分�
 #### T-12 `list_breakpoints`
 - 实现：`DbgGetBpList`。
 
-#### T-13 `get_registers`
-- 无参；返回当前线程所有通用寄存器 + EFLAGS + 段寄存器。
-- 实现：`Script::Register::GetContext` / 手动汇总。
+#### T-13 `get_registers` ✅ 已存在
+> `basic_read_tools.cpp:378+` 用 `DbgGetRegDumpEx` 实现，覆盖 32/64 GPR + eflags。
+> S1 不再重复实现，但纳入 prompt 文档（让 LLM 知道有这个工具）。
 
-#### T-14 `get_callstack`
-- 实现：`DbgFunctions()->StackCallStack` / `_dbgfunctions.h` 暴露的 `StackCallStackList`。
-- 注意：与 `trace_stack`（事后回放）区分，本工具是**当前现场**。
+#### T-14 `get_callstack` ✅ 已存在
+> `dynamic_context_tools.cpp:77+` 用 `DbgFunctions()->GetCallStack` 实现，
+> 含 max_frames 限制 + symbol 解析。同上不重复。
 
 ### P3 — 进阶
 
@@ -366,7 +366,7 @@ Agent 无法 patch 内存、改寄存器、下断点 → 无法做"自动二分�
 | 阶段 | 工作量 | 内容 |
 |---|---|---|
 | **S0 紧急修复** ✅ | 0.5–1 day | C-1 / C-2 / H-1 三条，无新功能（2026-05-24 完成） |
-| **S1 读类工具补全** | 1–2 day | T-11/T-12/T-13/T-14（全只读，零风险） |
+| **S1 读类工具补全** ✅ | 1–2 day | T-11 eval_expression / T-12 list_breakpoints（T-13/T-14 已存在）。预设 schema → v5（2026-05-24 完成） |
 | **S2 EventBus + wait_for_event** | 2–3 day | A-1 + T-06，架构改造，trace_recorder 迁移 |
 | **S3 P0 写控制工具** | 2–3 day | T-01..T-05 + ToolPolicy 框架（A-2） |
 | **S4 P1 修改类工具** | 2 day | T-07/T-08/T-09 + 审计日志 |

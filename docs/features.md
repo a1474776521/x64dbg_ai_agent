@@ -426,7 +426,7 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 | `analyze-function` | 围绕 RIP/EIP 所在函数整体行为分析；含 v4 强约束；S8 后含全 63 个工具 |
 | `who-calls-here` | 重点排查调用方：xref + 调用栈 + trace + 调用点反汇编 |
 | `string-api-context` | 字符串引用与 API 调用聚类（crypto/net/file/anti-debug） |
-| `sample-triage` | **S9 后续新增**。只读、≤5 工具调用：判定加壳/反调试/入口异常/IAT 健康度，输出结构化 checklist + 推荐下一步预设。avoiding 让用户用错预设绕大圈 |
+| `sample-triage` | **S9 后续新增**。只读、≤5 工具调用：判定加壳/反调试/入口异常/IAT 健康度，输出结构化 checklist + 推荐下一步预设。避免用户用错预设绕大圈 |
 | `malware-triage` / `unpack-helper` / `anti-anti-debug` | S8 三件套，S9 后续统一加 PHASE 0 verdict gate（首 2-3 工具调用判定预设前提是否成立，不成立则建议改用 sample-triage 或对应正确预设并 STOP） |
 
 所有出厂预设 `readonly=true`，systemPrompt 末尾强制 `OUTPUT LANGUAGE RULE`（必须 zh-CN，保留代码/地址/寄存器/指令原文）。
@@ -484,7 +484,7 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 }
 ```
 
-- 启动时 `diskSchema < kPresetSchemaVersion(=13)`：用新版 defaults 覆盖所有 readonly；用户预设保留；schema 12→13 自动按 id 推断 `group`/`tags` 兜底
+- 启动时 `diskSchema < kPresetSchemaVersion(=14)`：用新版 defaults 覆盖所有 readonly；用户预设保留；schema 12→13 自动按 id 推断 `group`/`tags` 兜底；schema 13→14 由 S9 后续方案 C 触发（PHASE 0 systemPrompt 升级 + sample-triage 入库）
 - 保存：`rename(.tmp → final)`；rename Access Denied（avast/Defender 抢锁）时 3 次重试 50 ms 间隔 + 原地 ofstream 覆写 fallback
 
 ---

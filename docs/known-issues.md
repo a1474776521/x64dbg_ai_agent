@@ -153,6 +153,38 @@
 - **位置**：`src/ai/tools/script_tools.cpp::RunScriptFileTool`
 - **可能改进**：x64dbg 有 `CB_SCRIPTFINISHED` 之类回调吗？需进一步调研 `_plugin_registercallback` 列表
 
+### K-23：场景预设 PHASE 0 verdict gate 与 maxIter 计算共享预算
+- **现象**：S9 后续方案 C 给 unpack-helper / malware-triage / anti-anti-debug 加 PHASE 0 自检（2-3 calls），但这些 calls 也计入 `maxIter`
+- **后果**：原本 maxIter=30 的 unpack-helper 现在 PHASE 1 实际可用 27 轮；复杂样本若 PHASE 0 误判向 PHASE 1 推进，进 PHASE 1 后预算偏紧
+- **缓解**：PHASE 0 严格限制 max 3 calls 且无误判时主动 STOP；已通过 systemPrompt 硬约束
+- **影响**：低；尚无 runtime 出现 maxIter 触底案例
+- **位置**：`src/ai/agent_preset.cpp:426-693` 三个场景预设
+- **可能改进**：AgentLoop 加 `phase0BudgetCalls` 字段独立计数，留待 G-3（`maxToolCalls` 与 maxIter 分离）一并做
+
+### K-24：Copilot prompt cache 命中数依赖底层模型路由（G-2 发现）
+- **现象**：Copilot 后端可能路由到 OpenAI / Anthropic / 其它模型，usage 字段命名不一；部分模型可能完全不返回 cache 字段
+- **后果**：AssistantPanel 顶栏可能显示 `input=N cache=n/a` 或 `cache=0%`，不一定是 cache 失效而是模型不暴露字段
+- **缓解**：`parseUsage()` helper 已三套字段兜底；`hitRatio() < 0` 时日志写 `hit_ratio=n/a` 与 `=0%` 区分
+- **影响**：观测层；不影响 cache 本身是否生效
+- **位置**：`src/ai/copilot_chat_client.cpp::parseUsage`
+- **后续**：runtime 实测拿到不同模型样本后建文档表
+
+### K-25：`stream_options.include_usage=true` 对非官方 OpenAI 兼容端点可能报错
+- **现象**：G-2 给 DeepSeek / Copilot 流式 body 加 `stream_options.include_usage=true`，但 OpenAI 协议规定该字段不被所有兼容端点支持
+- **后果**：若用户改 `api_base` 指到不支持此字段的反代 / 开源 OpenAI 兼容服务（如 vLLM 部分版本），可能 400 报错
+- **缓解**：暂无；DeepSeek 官方 + GitHub Copilot 实测正常
+- **影响**：低；当前仅这两个 provider 支持，无第三方端点配置
+- **位置**：`src/ai/deepseek_chat_client.cpp:136` + `src/ai/copilot_chat_client.cpp:55`
+- **可能改进**：捕获 400 后自动关闭 include_usage 重试
+
+### K-26：`agentStatusLabel_` 文本拼接 cache 状态可能超出顶栏宽度
+- **现象**：G-2 在 `[预设名]` 后追加 `· input=N cache=N%`，长预设名如 `anti-anti-debug` + 长 cache 数字可能挤压旁边按钮
+- **后果**：低分屏 / 窄面板下可能换行或截断
+- **缓解**：完整数据在 ToolTip 里；label 本身用 `Qt::ElideRight` 自然截断
+- **影响**：极低；尚无用户反馈
+- **位置**：`src/ui/assistant_panel.cpp::setActivePreset`
+- **可能改进**：cache 状态独立小 label，或顶栏改两行布局
+
 ---
 
 ## ⚪ 未支持（设计取舍，不是 bug）
@@ -179,6 +211,12 @@
 - 任何"分析整个模块 / 全部函数"类操作都要求用户先确认估算的 token 数
 - 设计取舍：防止误触烧光额度
 
+### N-06：sub-agent / 子工作流框架不支持（G-2 / S9 后续 决策）
+- 当前 AgentLoop 单上下文单 LLM 会话；不支持父 agent 调子 agent
+- 原因：方案 C 期间评估，子 agent 收益主要是上下文隔离，但会破坏 prompt cache 共享 + 双倍 system prompt 成本；inline PHASE 0 已能解决"预设前提自检"诉求
+- 后果：若未来想做"先 sample-triage 自动选预设再跑"这种链式自动化，需引入 sub-agent 机制（非小改）
+- 记于 `decisions.md`，重审触发条件：用户提出明确多预设链式跑诉求
+
 ---
 
 ## 📋 维护检查清单
@@ -186,9 +224,12 @@
 定期跑（建议每次发版前）：
 
 - [ ] `projects/*.db` 里 0 KB 文件清理
-- [ ] `logs/plugin.log` 大小检查（spdlog 默认 5 MB rotate 5 份）
+- [ ] `logs/plugin.log` 大小检查（spdlog 默认 4 MB rotate 5 份）
 - [ ] DPAPI 凭据文件是否仍能解密（用户机器换 Windows 账户会失效）
 - [ ] vcpkg baseline 更新检查（`vcpkg upgrade --no-dry-run`）
 - [ ] 双架构 .dp32/.dp64 都能在最新 x64dbg snapshot 加载
 - [ ] trace_demo Targeted Trace 回归（应 RETURNED）
 - [ ] CallStack 采样回归（JX3ClientX64 send 应 32 hits / 2 unique）
+- [ ] G-2 cache 观测：sample-triage 跑两轮，第二轮顶栏应显示 `cache=`>50%（DeepSeek）
+- [ ] 加壳样本（如 `cs_fuc_call_se.exe`）跑 unpack-helper：PHASE 0 应在 ≤3 calls 内识别 packer signature 进入 PHASE 1
+- [ ] 未加壳样本跑 unpack-helper：PHASE 0 应在 ≤3 calls 内 STOP 并建议改 sample-triage / analyze-function

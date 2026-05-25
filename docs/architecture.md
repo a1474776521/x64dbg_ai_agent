@@ -10,7 +10,8 @@
 │  │ (GUI/Dbg)│←→│  plugin/    入口、CB_* 回调、AI ▶ 子菜单    │  │
 │  └──────────┘  │  ai/        IChatProvider + Agent loop +    │  │
 │                │             ToolRegistry + 预设管理         │  │
-│                │  ai/tools/  12 个无状态只读工具             │  │
+│                │  ai/tools/  63 个工具（39 只读 + 5 控制 +    │  │
+│                │             19 写）按 8 文件分组             │  │
 │                │  debugger/  反汇编上下文采集                 │  │
 │                │  locator/   启发式扫描器                     │  │
 │                │  trace/     录制器 + 调用图 + 栈采样          │  │
@@ -33,12 +34,12 @@
 | 层 | 目录 | 职责 | 关键文件 |
 |---|---|---|---|
 | 入口 | `src/plugin/` | x64dbg 回调路由、菜单注册（含动态 AI ▶ 子菜单） | `plugin_main.cpp`、`plugin_callbacks.cpp`、`plugin_menus.cpp` |
-| AI | `src/ai/` | LLM provider 抽象、OAuth、embedding、SSE、**Agent loop / 工具注册 / 预设管理** | `chat_provider.h`、`copilot_*.cpp`、`deepseek_*.cpp`、`provider_manager.cpp`、`embedding_client.cpp`、`sse_parser.cpp`、`agent_loop.cpp`、`agent_worker.cpp`、`agent_preset.cpp`、`preset_store.cpp`、`tools/*.cpp` |
+| AI | `src/ai/` | LLM provider 抽象、OAuth、embedding、SSE、**Agent loop / 工具注册（63 个）/ 预设管理（15 出厂）/ usage 解析（G-2）** | `chat_provider.h`（UsageInfo + onUsage）、`copilot_*.cpp`、`deepseek_*.cpp`、`provider_manager.cpp`、`embedding_client.cpp`、`sse_parser.cpp`、`agent_loop.cpp`、`agent_worker.cpp`（`usageUpdated` signal）、`agent_preset.cpp`、`preset_store.cpp`、`tools/*.cpp`（8 分组文件）|
 | 调试 | `src/debugger/` | 反汇编片段采集 / 选区识别 | `disasm_context.cpp` |
 | 定位器 | `src/locator/` | API / 字符串 / 特征码 / 关键词扩展 | `locator_engine.cpp`、`api_scanner.cpp` 等 |
 | Trace | `src/trace/` | 步进录制 + 调用图 + 反向栈采样 | `trace_recorder.cpp`、`call_graph.cpp`、`callstack_tracer.cpp` |
 | 存储 | `src/storage/` | sqlite + sqlite-vec + 跨 DB 只读浏览 | `session_store.cpp`、`project_context.cpp`、`project_browser.cpp` |
-| UI | `src/ui/` | Qt 主面板 + 各功能对话框 + **聊天流子控件 + 预设编辑器** | `assistant_panel.cpp`、`chat_view.cpp`、`tool_call_card.cpp`、`preset_editor_dialog.cpp`、`*_dialog.cpp` |
+| UI | `src/ui/` | Qt 主面板 + 各功能对话框 + **聊天流子控件 + 预设编辑器（QTreeWidget 三态）+ 工具列表对话框** | `assistant_panel.cpp`（`agentStatusLabel_` G-2 cache 拼接 + `usageUpdated` handler）、`chat_view.cpp`、`tool_call_card.cpp`、`preset_editor_dialog.cpp`、`tools_list_dialog.cpp`、`*_dialog.cpp` |
 | 工具 | `src/util/` | DPAPI、SHA256、路径、配置、日志 | `secret_store.cpp`、`hashing.cpp`、`paths.cpp`、`config.cpp`、`logging.cpp` |
 
 依赖方向严格自上而下：`ui → {ai, storage, trace, locator, debugger} → util`。任何下层不依赖 ui/Qt。
@@ -167,6 +168,8 @@ HistoryDialog.show
                     │          - delta.content              → cb.onAssistantDelta            → ChatView 气泡增量追加
                     │          - delta.reasoning_content    → cb.onAssistantReasoningDelta   → ReasoningBlock 折叠面板
                     │          - delta.tool_calls[index]    → 增量累积 id / name / arguments
+                    │          - usage (G-2，include_usage) → cb.onUsage(UsageInfo)          → AgentWorker.usageUpdated signal
+                    │                                                                          → AssistantPanel.agentStatusLabel_ 末尾拼 cache=N%
                     │
                     ├─ 本轮结束 → cb.onAssistantMessage(完整 content + reasoning + toolCalls)
                     │              → 写入 req.messages（role=assistant；含 reasoning_content 用于下一轮回传）
@@ -187,6 +190,39 @@ HistoryDialog.show
 工具实现完全无状态；返回硬截断为 `{truncated, original_bytes, max_bytes, preview}`。地址类参数全用 string，内部 `parseUInt64` 解析（兼容 `0x` 前缀 / 十进制）。
 
 **DeepSeek thinking 模型 reasoning_content 回传**：`ChatMessage` 含 `reasoningContent` 字段，assistant 消息序列化时回传给下一轮。M-1 (2026-05-24) 实测 deepseek-reasoner 接受"回传"与"剥离"两种形式，本插件保留回传以兼容未来协议收紧并复用 UI 折叠面板。
+
+**场景预设 PHASE 0 verdict gate（S9 后续方案 C / 2026-05-25）**：unpack-helper / malware-triage / anti-anti-debug 三个场景预设的 systemPrompt 头部嵌入"PHASE 0 自检段"——先用 2-3 个低成本工具判断样本是否符合本预设前提（如 unpack-helper 检测 packer signature），不符合则主动 `STOP` 并建议改用其他预设；符合才进入 PHASE 1 主流程。PHASE 0 与 PHASE 1 共享同一 LLM 上下文与 maxIter 预算（非 sub-agent，决策见 `decisions.md`）。预算硬上限：unpack-helper max 3 / malware-triage max 2 / anti-anti-debug max 2。
+
+### 4.6 Prompt Cache 观测（G-2 / 2026-05-25）
+
+让用户实时看到 prompt cache 命中率，验证 system prompt + tools schema 的英文化 / 顺序稳定策略是否生效。
+
+```
+provider.streamChat
+   │
+   └─ SSE 末尾 [DONE] 前的 usage chunk
+        │ (DeepSeek: stream_options.include_usage=true → 末轮带 usage)
+        │ (Copilot:  同 OpenAI 协议，include_usage=true)
+        │
+        └─ parseUsage(json) → UsageInfo{
+             prompt, completion, total,
+             cachedRead,            ← DeepSeek prompt_cache_hit_tokens / OpenAI prompt_tokens_details.cached_tokens / Anthropic cache_read_input_tokens
+             cacheCreation,         ← Anthropic cache_creation_input_tokens
+             reasoning              ← OpenAI completion_tokens_details.reasoning_tokens
+           }
+                 │
+                 └─ AgentLoop.onUsage(UsageInfo)
+                       │
+                       └─ AgentWorker emit usageUpdated(UsageInfo)
+                             │
+                             ├─ spdlog [G-2 CACHE] input=N cached=N miss=N hit_ratio=N.N% completion=N reasoning=N cache_creation=N
+                             └─ AssistantPanel slot:
+                                    lastCacheStatus_ = "· input=N cache=N%"
+                                    setActivePreset 重画 → agentStatusLabel_ = "[预设名] · input=N cache=N%"
+                                    setToolTip(完整 usage 多行明细)
+```
+
+`UsageInfo::hitRatio()` 返回 `cachedRead / prompt`；`prompt == 0` 时返 -1，UI 显示 `cache=n/a`、日志写 `hit_ratio=n/a`（区分"cache 失效=0%"与"模型不暴露字段=n/a"）。Copilot 后端路由不同模型时字段命名不一，`parseUsage()` 三套字段兜底（K-24）。
 
 ## 5. 存储 Schema
 
@@ -233,21 +269,27 @@ Agent 预设保存为单一 JSON 文件，与 sqlite 库分离：
 %APPDATA%\x64dbg-ai-plugin\agent_presets.json
 
 {
-  "schemaVersion": 3,
+  "schemaVersion": 14,
   "presets": [
     { "id": "...", "name": "...", "systemPrompt": "...",
       "userTemplate": "...", "enabledTools": ["..."],
       "maxIter": 20, "temperature": 0.2,
       "provider": "deepseek", "model": "",
-      "showInContextMenu": true, "readonly": true },
+      "showInContextMenu": true, "readonly": true,
+      "tags": ["exploration", "triage"],          // S9 G-10 工具/预设标签
+      "group": "exploration",                     // 分组（general/exploration/cracking/tracing/scenarios）
+      "outputContract": "...",                    // 强约束输出格式（如 JSON schema 描述）
+      "policyOverrides": { "write_memory": "deny" } // 预设级 ToolPolicy 覆盖
+    },
     ...
   ]
 }
 ```
 
-- 出厂预设 5 个全部 `readonly=true`，由 `defaultPresets()` 返回
-- 启动时若磁盘 `schemaVersion < kPresetSchemaVersion`：用新版 defaults 覆盖所有 readonly，保留用户预设
+- 出厂预设 **15 个**全部 `readonly=true`（general 3 / exploration 6 / cracking 2 / tracing 1 / scenarios 3），由 `defaultPresets()` 返回
+- 启动时若磁盘 `schemaVersion < kPresetSchemaVersion (=14)`：用新版 defaults 覆盖所有 readonly，保留用户预设
 - 保存路径：`rename(.tmp → final)`；rename Access Denied 时 3 次重试 + 原地 ofstream 覆写 fallback（avast / Windows Defender 抢锁）
+- schema 历次升级触发因素：v3 加 provider/model；v4 D-03 evidence rule；v6-v10 各组预设引入；v13 S9 tags/policyOverrides；v14 S9 后续方案 C 新增 sample-triage + 三场景预设 PHASE 0 verdict gate
 
 ## 6. 关键设计决策
 
@@ -273,6 +315,19 @@ Agent 预设保存为单一 JSON 文件，与 sqlite 库分离：
 | Copilot 走 Agent 时自动降级单轮 | Copilot Chat API 不稳定支持 OpenAI function calling；用空 tools 列表退化为普通流式 |
 | 5 出厂预设 readonly | 避免用户误改后无法恢复；UI 提供「复制为新预设」入口 |
 | 反汇编右键 AI ▶ 子菜单动态枚举 | 用户可选择性把常用预设（如「分析当前函数」）暴露到右键，不堆塞菜单 |
+| 写工具 5s 倒计时强制 confirm（S3）| 长会话疲劳下用户可能盲点 OK；5s 强制看一眼又不至于卡死流程；不开 autoApprove 白名单（决策详 `decisions.md`）|
+| ToolPolicy 三档 Read/DbgControl/Write（S3）| `wait_for_event` / `step_*` / `run_*` 归 DbgControl：要 audit 不要 confirm，否则交互节奏崩溃 |
+| 独立 write_audit.log（S3）| spdlog 多 logger，pattern 裸 `%v` → JSON 单行格式不被时间戳污染，grep/jq 友好 |
+| label/comment 用 `text=""` 表删除（S6）| 不另开 delete_label / delete_comment，减少同义工具决策噪声 + 缩 tools schema 体积 |
+| run_continue 默认 fire-and-forget（S6）| 长跑场景不浪费 agent loop iteration；LLM 显式用 wait_for_event 更精确 |
+| get_cfg 只输出 Mermaid 不带 JSON（S7）| 节点 label 已编码 start/end/icount/terminal/icall；token 减半 |
+| 不暴露 stack_pop（S8）| 真弹出破坏 ESP 一致性；显式 peek+set_register 让 agent 思考"要不要改栈" |
+| anti-debug-bypass 合并入 anti-anti-debug（S8）| 单预设两阶段 workflow 比双预设跳转上下文连贯；后由 sample-triage 补"只诊断"生态位 |
+| Tool description 中文化只做 UI（S9 G-9 A 档）| 保护 prompt cache（system prompt + tools schema 英文一致）；中文 token 占用 +30% 在 G-2 验证 cache 命中率前是盲改 |
+| PresetEditor 工具列表用 QTreeWidget 三态（S9 G-10）| 63 工具单 ListWidget 平铺过载；整组勾选语义最自然 |
+| Scenario 预设 inline PHASE 0 verdict gate（S9 后续方案 C）| 不上 sub-agent 框架：共享 prompt cache + 单轮对话上下文；解决"前提硬编码导致空转" |
+| 流式 body 加 `stream_options.include_usage=true`（G-2）| OpenAI 协议标准方式拿 cache 字段；少数兼容端点可能 400（K-25）|
+| Cache 状态拼 `agentStatusLabel_` 末尾（G-2）| 顶栏宽度有限避免新加 label；详细数据走 ToolTip |
 
 ## 7. 构建链路
 

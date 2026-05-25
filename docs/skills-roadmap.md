@@ -123,24 +123,25 @@
 
 ## 2. 工作流预设（"预设"）矩阵
 
-### 2.1 已实现（14 个）
+### 2.1 已实现（15 个）
 
 | # | 预设 ID | 状态 | 中文名 | 启用工具 | 上下文菜单 | maxIter | 阶段 |
 |---|---|---|---|---|---|---|---|
-| 1 | `freeform` | ✅ | 自由 Agent | 全 62 | 否 | 20 | M4 |
-| 2 | `analyze-function` | ✅ | 分析当前函数 | 全 62（含写+脚本+S6 沉淀+地图+S7 高级+S8 全部 13） | 是 | 20 | M4 + S3-S8 持续扩 |
+| 1 | `freeform` | ✅ | 自由 Agent | 全 63 | 否 | 20 | M4 |
+| 2 | `analyze-function` | ✅ | 分析当前函数 | 全 63（含写+脚本+S6 沉淀+地图+S7 高级+S8 全部 14） | 是 | 20 | M4 + S3-S8 持续扩 |
 | 3 | `who-calls-here` | ✅ | 谁调用了这里 | 8（纯读） | 是 | 20 | M4 |
 | 4 | `string-api-context` | ✅ | 字符串与 API 关联 | 7（纯读） | 是 | 20 | M4 |
 | 5 | `explain-here` | ✅ | 解释此处 | 5（纯读） | 是 | 6 | M4 |
 | 6 | `annotate-function` | ✅ | 标注当前函数 | 13（读 11 + 写 set_label/set_comment） | 是 | 20 | S6 |
 | 7 | `map-program` | ✅ | 程序地图 | 8（纯读：list_modules + memory_map + page_protect + list_functions + imports + exports + list_labels + rag_search） | 是 | 20 | S6 |
 | 8 | `crack-license` | ✅ | 破解许可校验 | 21（定位+注释+控制+set_flag+patch+审计） | 是 | 20 | S7 |
-| 9 | `anti-anti-debug` | ✅ | 反反调试 | 30+（S8 后扩了 get_anti_debug_flags / list_threads / enum_handles / enum_windows 共 5 个被动诊断工具，systemPrompt 增"先 passive 后 active"） | 是 | 20 | S7→S8 增强 |
+| 9 | `anti-anti-debug` | ✅ | 反反调试 | 30+（S8 后扩了 get_anti_debug_flags / list_threads / enum_handles / enum_windows 共 5 个被动诊断工具；S9 后续加 PHASE 0 verdict gate） | 是 | 20 | S7→S8 增强→S9 后续 gate |
 | 10 | `cfg-explorer` | ✅ | 控制流图探索 | 12（CFG + 标注查询） | 是 | 12 | S7 |
 | 11 | `patch-and-verify` | ✅ | 补丁与验证 | 20（list/restore + 备份-修改-验证流程） | 是 | 20 | S7 |
 | 12 | `trace-input` | ✅ | 追踪输入数据 | 21（HW write BP + wait_for_event + dump 焦点） | 是 | 20 | S7 |
-| 13 | `malware-triage` | ✅ | 恶意代码取证 | 28（纯只读 + 仅允许 label/comment 沉淀；S8-A/B/C 全部 + translate_error_code） | 是 | 25 | S8 |
-| 14 | `unpack-helper` | ✅ | 脱壳辅助 | 24（HW BP + run_continue + get_trace_record_info + add_function + stack_peek） | 是 | 30 | S8 |
+| 13 | `malware-triage` | ✅ | 恶意代码取证 | 28（纯只读 + 仅允许 label/comment 沉淀；S8-A/B/C 全部 + translate_error_code；S9 后续加 PHASE 0 verdict gate） | 是 | 25 | S8→S9 后续 gate |
+| 14 | `unpack-helper` | ✅ | 脱壳辅助 | 27（HW BP + run_continue + get_trace_record_info + add_function + stack_peek；S9 后续加 PHASE 0 + 补 imports/exports/info） | 是 | 30 | S8→S9 后续 gate |
+| 15 | `sample-triage` | ✅ | 样本预检（形态预判） | 10（全只读：modules/info/imports/exports/memory_map/page_protect/registers/threads/eval/labels）；MAX 5 calls 硬限 | 是 | 8 | S9 后续 |
 
 ### 2.2 计划中
 
@@ -150,12 +151,15 @@
 
 #### S8 目标（已完成 ✅ — 见 2.1 表第 13–14 行；anti-anti-debug 同步扩 5 工具；tag `s8-done`）
 
-| # | 预设 ID | 状态 | 备注 |
-|---|---|---|---|
-| 13 | `malware-triage` | ✅ | 纯只读 + 仅 label/comment 沉淀；S8-A/B/C + translate_error_code |
-| 14 | `unpack-helper` | ✅ | HW BP + trace_record + add_function + stack_peek |
-| —  | `anti-debug-bypass`（原计划） | 合并 | 与 `anti-anti-debug` 语义重叠，决策为扩 anti-anti-debug 加 PEB 被动诊断 |
-| —  | `decrypt-loop-runner` | 不做 | 用户可用 freeform + load_script 自由组合 |
+#### S9 + S9 后续（已完成 ✅）
+
+- S9：UI 重构 + 工具描述中文化 + G-10 工具/预设管理界面（**未新增预设**；tag `s9-done`）
+- S9 后续（方案 C）：新增 `sample-triage`（见 2.1 第 15 行）；3 个场景预设加 PHASE 0 verdict gate；**未打 tag**（挂在 S9 范畴）
+
+| 预设 ID | 状态 | 备注 |
+|---|---|---|
+| `anti-debug-bypass`（原计划） | 合并 | 与 `anti-anti-debug` 语义重叠，决策为扩 anti-anti-debug 加 PEB 被动诊断 |
+| `decrypt-loop-runner` | 不做 | 用户可用 freeform + load_script 自由组合 |
 
 ---
 
@@ -169,9 +173,12 @@
 | S3 | ToolPolicy + 5s confirm + audit + 6 个写工具 | 6 | 0 | v7 | ✅ `s3-done` |
 | S4 | 数据写三件套 | 3 | 0 | v8 | ✅ `s4-done` |
 | S5 | 脚本三件套 | 3 | 0 | v9 | ✅ `s5-done` |
-| **S6** | **基础控制 + 沉淀（label/comment） + 程序地图** | **10** | **2** | **v10** | ✅ `s6-done` |
-| **S7** | **高级断点 + 汇编 + CFG + 补丁管理 + GUI 焦点** | **12** | **5** | **v11** | ✅ `s7-done` |
-| **S8** | **场景化（反调试洞察 / 取证 / SEH / 注入+栈 / trace+错误码+函数）** | **13** | **2**(+扩 anti-anti-debug) | **v12** | ✅ `s8-done` |
+| S6 | 基础控制 + 沉淀（label/comment） + 程序地图 | 10 | 2 | v10 | ✅ `s6-done` |
+| S7 | 高级断点 + 汇编 + CFG + 补丁管理 + GUI 焦点 | 12 | 5 | v11 | ✅ `s7-done` |
+| S8 | 场景化（反调试洞察 / 取证 / SEH / 注入+栈 / trace+错误码+函数） | 13 | 2（+扩 anti-anti-debug） | v12 | ✅ `s8-done` |
+| **S9** | **工具/预设管理 UI 重构（G-10）+ 工具描述中文化（G-9 A 档）+ 分类系统** | **0** | **0** | **v13** | ✅ `s9-done` |
+| **S9 后续** | **场景预设 PHASE 0 verdict gate + 新增 sample-triage 预检（方案 C）** | **0** | **1** | **v14** | ✅（未 tag） |
+| **G-2** | **DeepSeek / Copilot prompt cache 命中观测（usage 通路 + UI 显示 + `[G-2 CACHE]` 日志）** | **0** | **0** | — | ✅（commit `5b42e52`，未 tag） |
 
 ---
 
@@ -185,12 +192,12 @@
 
 ---
 
-## 5. 工具治理（待办，独立小段，不阻塞 S6/S7/S8）
+## 5. 工具治理（独立小段，不阻塞 S 阶段开发）
 
-> 背景：工具数从 27 涨到 57 后，每次 chat completion 的 input tokens 会从 ~4k 涨到 ~8k，
-> 影响成本（DeepSeek 单次会话 $0.02→$0.04）和首 token 延迟（多 1-2 秒）。
-> 已有防御：**预设白名单**（`enabledTools` 只透传勾选的工具）+ `maxIter=20`。
-> 用户决定：**先推进 S6/S7/S8 加技能，治理后续做**。
+> 背景：工具数从 27 → 63 后，每次 chat completion 的 input tokens 会从 ~4k 涨到 ~10k+，
+> 影响成本（DeepSeek 单次会话 $0.02→$0.05）和首 token 延迟（多 1-2 秒）。
+> 已有防御：**预设白名单**（`enabledTools` 只透传勾选的工具）+ `maxIter`（按预设差异化 6~30）+ **prompt cache 命中观测**（G-2，2026-05-25 完成）。
+> 用户决定：**先推进 S 阶段加技能，治理穿插做**。
 
 ### 5.1 治理任务清单
 

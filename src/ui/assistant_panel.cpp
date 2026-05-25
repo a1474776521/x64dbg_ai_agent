@@ -892,8 +892,12 @@ void AssistantPanel::setActivePreset(const std::string& presetId)
 
     auto opt = PresetStore::instance().findById(presetId);
     if (opt) {
-        agentStatusLabel_->setText(QStringLiteral("[%1]")
-                                       .arg(QString::fromStdString(opt->name)));
+        // G-2: 末尾拼最近一轮 cache 状态（若有）
+        QString text = QStringLiteral("[%1]").arg(QString::fromStdString(opt->name));
+        if (!lastCacheStatus_.isEmpty()) {
+            text += QStringLiteral(" · ") + lastCacheStatus_;
+        }
+        agentStatusLabel_->setText(text);
         agentBtn_->setToolTip(QStringLiteral("用工作流「%1」跑 Agent：%2")
                                   .arg(QString::fromStdString(opt->name),
                                        QString::fromStdString(opt->description)));
@@ -1210,6 +1214,29 @@ void AssistantPanel::wireAgentWorker(AgentWorker* w,
             });
         agentTerminalEventHandled_ = true;  // K-13
         setAgentRunning(false);
+    });
+
+    // G-2 (2026-05-25): cache 命中观测——更新 agentStatusLabel_ 末尾的 cache 状态
+    connect(w, &AgentWorker::usageUpdated, this,
+            [this](int promptTokens, int cachedPromptTokens,
+                   int /*completionTokens*/, int /*reasoningTokens*/,
+                   double hitRatio) {
+        if (hitRatio < 0.0) {
+            lastCacheStatus_ = QStringLiteral("input=%1 cache=n/a").arg(promptTokens);
+        } else {
+            lastCacheStatus_ = QStringLiteral("input=%1 cache=%2%")
+                                   .arg(promptTokens)
+                                   .arg(QString::number(hitRatio * 100.0, 'f', 1));
+        }
+        if (agentStatusLabel_) {
+            agentStatusLabel_->setToolTip(
+                QStringLiteral("最近一轮 LLM 调用：input=%1 / cached=%2 / hit_ratio=%3")
+                    .arg(promptTokens).arg(cachedPromptTokens)
+                    .arg(hitRatio < 0.0 ? QStringLiteral("n/a")
+                                        : QString::number(hitRatio * 100.0, 'f', 1) + QStringLiteral("%")));
+        }
+        // 重画 label（带最新 cache 状态）
+        setActivePreset(activePresetId_);
     });
 
     connect(w, &AgentWorker::finished, this, [this, view](int iter) {

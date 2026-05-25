@@ -68,6 +68,8 @@ struct AgentRunCallbacks {
     std::function<void(const std::string& err)>          onError;
     // 达到 maxIter 但还有 tool_calls 没消化（UI 可以提供"继续"按钮）
     std::function<void(int iter, int pendingCalls)>      onMaxIterReached;
+    // G-2 (2026-05-25): 每轮 LLM 调用的 token 用量 + cache 命中
+    std::function<void(const UsageInfo&)>                onUsage;
     // 正常完成（最后一轮没 tool_calls）
     std::function<void()>                                onDone;
 };

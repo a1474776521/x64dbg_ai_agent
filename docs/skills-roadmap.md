@@ -197,7 +197,7 @@
 | # | 任务 | 优先级 | 状态 | 触发时机 |
 |---|---|---|---|---|
 | G-1 | 复查现有 27 工具 description 长度，全部砍到 ≤80 字 + 关键限制 | P1 | ❌ | S7 完成后 |
-| G-2 | 验证 DeepSeek / Copilot prompt caching 是否启用（system prompt + tools 缓存命中后 input 价 ÷10） | P0 | ❌ | S6 完成后立即查 |
+| G-2 | 验证 DeepSeek / Copilot prompt caching 是否启用（system prompt + tools 缓存命中后 input 价 ÷10） | P0 | ✅ | S9 后 |
 | G-3 | `AgentWorker` 加 `maxToolCalls=30` 配置（与 maxIter 区分） | P1 | ❌ | S7 |
 | G-4 | system prompt 加"同义工具决策树"（step_in/over/out/run_until/run_continue 何时用谁） | P1 | ❌ | S6 完成后 |
 | G-5 | PresetEditor UI 加"代价提示"：勾工具时显示"预计 +X tokens/轮"（**并入 G-10**） | P2 | ✅ | S9 |
@@ -330,3 +330,28 @@ S6 期间用户提出"全量中文化"诉求。结论 **暂不做，先收尾 S6
 4. **未做 sub-agent 改造**：理由是当前 AgentLoop 无 sub-agent 框架，inline PHASE 0 共享 prompt cache + 单轮对话体验更好
 
 **验证**：双架构 Release 编译零警告通过。Runtime 实测留待回归。
+
+### 5.7 G-2 prompt cache 命中观测（2026-05-25）
+
+**背景**：DeepSeek / Copilot 都支持 prompt caching（system prompt + tools schema 命中后 input token 价 ÷10），但此前无任何观测手段——既不知道是否真有命中，也不知道命中率多少。需要先把数据拉出来，才能决定 G-9 B 档（userTemplate 中文化）会不会破坏 cache。
+
+**实施**：
+
+1. **`UsageInfo`（`chat_provider.h`）** 拓宽到 6 字段：promptTokens / completionTokens / totalTokens / cachedPromptTokens / cacheCreationTokens / reasoningTokens，加 `hitRatio()` 计算。同时 `ChatStreamCallbacks` 加可选 `onUsage` 回调。
+2. **DeepSeek client**：流式分支 body 加 `stream_options.include_usage=true`（不加 SSE 末尾不会发 usage chunk）；SSE parser 识别 `choices=[] && usage` 的末尾 chunk；非流式分支解析 `usage.prompt_cache_hit_tokens` / `completion_tokens_details.reasoning_tokens`。
+3. **Copilot client**：同样改造。抽 `parseUsage()` helper 兼容 OpenAI 与 Anthropic 两种字段命名（`prompt_tokens_details.cached_tokens` vs `cache_read_input_tokens` / `cache_creation_input_tokens`，`input_tokens` vs `prompt_tokens`）——具体哪种由 Copilot 路由的底层模型决定，实测前不确定。
+4. **`AgentLoop`** 加 `onUsage` 透传给 worker。
+5. **`AgentWorker`** 加 `usageUpdated(prompt, cached, completion, reasoning, ratio)` signal，并写单行 `[G-2 CACHE] input=N cached=N miss=N hit_ratio=N% completion=N reasoning=N cache_creation=N` 日志便于 grep。
+6. **`AssistantPanel`** connect signal，`agentStatusLabel_` 末尾追加「· input=N cache=N%」（保留预设名前缀），ToolTip 显示完整 4 字段。新增成员 `lastCacheStatus_` 缓存最近一轮状态。
+
+**字段映射对照**：
+
+| Provider | input | cached | miss | reasoning |
+|---|---|---|---|---|
+| DeepSeek | `prompt_tokens` | `prompt_cache_hit_tokens` | `prompt_cache_miss_tokens` | `completion_tokens_details.reasoning_tokens` |
+| OpenAI (Copilot) | `prompt_tokens` | `prompt_tokens_details.cached_tokens` | — | `completion_tokens_details.reasoning_tokens` |
+| Anthropic (Copilot) | `input_tokens` | `cache_read_input_tokens` | — | — |
+
+**验证**：双架构 Release 编译零警告通过。Runtime 实测留待回归（取真实 cache hit ratio 数据后再决定 G-9 B 档）。
+
+**Commit 策略**：独立 commit，不打 tag（单点改进非 milestone）。

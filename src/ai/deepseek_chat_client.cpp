@@ -139,6 +139,10 @@ void DeepSeekChatClient::streamChat(const ChatRequest& req, const ChatStreamCall
         {"temperature", req.temperature},
     };
     if (req.maxTokens > 0) body["max_tokens"] = req.maxTokens;
+    // G-2 (2026-05-25): 要求 SSE 末尾发一个 usage chunk，便于观测 prompt cache 命中率
+    if (req.stream) {
+        body["stream_options"] = {{"include_usage", true}};
+    }
 
     nlohmann::json msgs = nlohmann::json::array();
     for (const auto& m : req.messages) {
@@ -248,6 +252,20 @@ void DeepSeekChatClient::streamChat(const ChatRequest& req, const ChatStreamCall
                     if (!calls.empty()) cb.onToolCalls(std::move(calls));
                 }
             }
+            // G-2: 非流式 usage
+            if (j.contains("usage") && j["usage"].is_object() && cb.onUsage) {
+                const auto& u = j["usage"];
+                UsageInfo ui;
+                ui.promptTokens        = u.value("prompt_tokens", 0);
+                ui.completionTokens    = u.value("completion_tokens", 0);
+                ui.totalTokens         = u.value("total_tokens", 0);
+                ui.cachedPromptTokens  = u.value("prompt_cache_hit_tokens", 0);
+                // DeepSeek 也给 reasoning_tokens（thinking 模型）
+                if (u.contains("completion_tokens_details") && u["completion_tokens_details"].is_object()) {
+                    ui.reasoningTokens = u["completion_tokens_details"].value("reasoning_tokens", 0);
+                }
+                cb.onUsage(ui);
+            }
             if (cb.onDone) cb.onDone();
         } catch (const std::exception& e) {
             if (cb.onError) cb.onError(std::string("解析响应失败: ") + e.what());
@@ -291,6 +309,19 @@ void DeepSeekChatClient::streamChat(const ChatRequest& req, const ChatStreamCall
         }
         try {
             auto j = nlohmann::json::parse(data);
+            // G-2: usage chunk（DeepSeek 在 [DONE] 前发一个 choices=[] 带 usage 的 chunk）
+            if (j.contains("usage") && j["usage"].is_object() && cb.onUsage) {
+                const auto& u = j["usage"];
+                UsageInfo ui;
+                ui.promptTokens        = u.value("prompt_tokens", 0);
+                ui.completionTokens    = u.value("completion_tokens", 0);
+                ui.totalTokens         = u.value("total_tokens", 0);
+                ui.cachedPromptTokens  = u.value("prompt_cache_hit_tokens", 0);
+                if (u.contains("completion_tokens_details") && u["completion_tokens_details"].is_object()) {
+                    ui.reasoningTokens = u["completion_tokens_details"].value("reasoning_tokens", 0);
+                }
+                cb.onUsage(ui);
+            }
             if (!j.contains("choices") || j["choices"].empty()) return;
             const auto& choice = j["choices"][0];
             if (choice.contains("finish_reason") && choice["finish_reason"].is_string()) {

@@ -148,12 +148,14 @@ private:
     QToolButton*        toolsBtn_    = nullptr;   // 多选复选菜单（暂禁，预设 enabledTools 优先）
     QMenu*              toolsMenu_   = nullptr;
     QPushButton*        cancelBtn_   = nullptr;
-    QLabel*             agentStatusLabel_ = nullptr;  // 显示当前激活预设名
+    QLabel*             agentStatusLabel_ = nullptr;  // 显示当前激活预设名 [+ 最近一轮 cache 命中率]
 
     std::string         activePresetId_;          // 当前激活预设（聊天框输入也用它）
     QPointer<AgentWorker> agentWorker_;
     std::shared_ptr<std::atomic<bool>> agentCancel_;  // 供 cancel 按钮触发
     bool                agentTerminalEventHandled_ = false;  // K-13: failed/maxIter 后跳过 finished 的冗余日志
+    // G-2 (2026-05-25): 最近一轮 cache 状态（用于 agentStatusLabel_ 末尾拼接显示）
+    QString             lastCacheStatus_;
 
     int64_t             currentSessionId_ = 0;
     QString             pendingModelForNewSession_;  // 用户已选模型但尚未创建会话时缓存

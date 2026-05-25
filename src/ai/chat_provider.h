@@ -73,6 +73,32 @@ struct ChatRequest {
     std::string              toolChoice;
 };
 
+// ===== G-2 (2026-05-25): prompt cache 命中观测 =====
+//
+// 跨 provider 的统一 usage 视图。各字段含义：
+//   promptTokens / completionTokens / totalTokens —— OpenAI 风格三件套
+//   cachedPromptTokens —— 命中 cache 的 input token 数（提取自下列任一来源）：
+//     - DeepSeek: usage.prompt_cache_hit_tokens
+//     - OpenAI:   usage.prompt_tokens_details.cached_tokens
+//     - Anthropic via Copilot: usage.cache_read_input_tokens
+//   cacheCreationTokens —— 仅 Anthropic：本轮新写入 cache 的 input token 数
+//   reasoningTokens —— DeepSeek thinking / OpenAI o-series：reasoning 部分 token 数
+//
+// 缺失字段填 0。hitRatio() = cached / max(prompt, 1)；prompt=0 时返回 -1。
+struct UsageInfo {
+    int promptTokens         = 0;
+    int completionTokens     = 0;
+    int totalTokens          = 0;
+    int cachedPromptTokens   = 0;
+    int cacheCreationTokens  = 0;
+    int reasoningTokens      = 0;
+
+    double hitRatio() const {
+        if (promptTokens <= 0) return -1.0;
+        return static_cast<double>(cachedPromptTokens) / static_cast<double>(promptTokens);
+    }
+};
+
 struct ChatStreamCallbacks {
     std::function<void(std::string_view delta)> onDelta;
     std::function<void(std::string error)>      onError;
@@ -86,6 +112,13 @@ struct ChatStreamCallbacks {
     // DeepSeek thinking 模型的推理过程增量。与 onDelta 分开传递，
     // 既可在 UI 里折叠显示，也便于 AgentLoop 累积后回传给下一轮 API。
     std::function<void(std::string_view delta)> onReasoningDelta;
+
+    // === G-2 (2026-05-25): prompt cache 命中观测 ===
+    // 本轮 LLM 调用的 token 用量；可选回调，仅在 provider 解析到 usage 字段时触发。
+    // 流式：DeepSeek/OpenAI 需要 stream_options.include_usage=true，
+    //       服务端会在 [DONE] 前发一个 choices=[] 且带 usage 的 chunk。
+    // 非流式：从 response.usage 直接取。
+    std::function<void(const UsageInfo&)> onUsage;
 };
 
 // Provider 标识；持久化到 provider.txt（fallback: config.json 的 "provider" 字段）。

@@ -101,6 +101,10 @@ int AgentLoop::run(AgentRunRequest&         req,
         scb.onToolCalls = [&](std::vector<ToolCall> calls) {
             st.toolCalls = std::move(calls);
         };
+        // G-2: usage 透传给 worker，由 UI 展示 cache hit ratio
+        scb.onUsage = [&](const UsageInfo& u) {
+            if (cb.onUsage) cb.onUsage(u);
+        };
 
         try {
             req.provider->streamChat(creq, scb);

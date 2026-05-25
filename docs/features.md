@@ -400,6 +400,7 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
   - pending（灰）→ running（蓝，显示 args）→ done（绿，显示耗时 + truncated 标识）/ error（红）
   - 默认折叠，标题如 `▶ read_memory  (12 ms)`
 - **ReasoningBlock**（M4.6 Reasoning UI）：thinking 模型独立折叠面板，灰色等宽字体，标题 `▶ 思考过程 (N)` 显当前字符数
+- **Prompt cache 命中观测（G-2）**：顶栏 `[预设名]` 标签末尾追加 `· input=N cache=N%`，ToolTip 显示完整 input/cached/hit_ratio。日志同步写 `[G-2 CACHE] input=… cached=… hit_ratio=…% completion=… reasoning=… cache_creation=…`。兼容 DeepSeek (`prompt_cache_hit_tokens`) / OpenAI (`prompt_tokens_details.cached_tokens`) / Anthropic (`cache_read_input_tokens` + `cache_creation_input_tokens`) 三套字段命名；流式调用需 `stream_options.include_usage=true` 才能在 SSE 末尾收到 usage chunk。
 
 ---
 

@@ -127,6 +127,32 @@ void AgentWorker::start(AgentRunRequest req)
                 },
                 Qt::QueuedConnection);
         };
+        // G-2 (2026-05-25): prompt cache 命中观测
+        cb.onUsage = [self](const UsageInfo& u) {
+            if (!self) return;
+            // [G-2 CACHE] 单行日志，便于 grep；hit_ratio 在 prompt=0 时记 "n/a"
+            double r = u.hitRatio();
+            if (r < 0.0) {
+                XAI_LOG_INFO(
+                    "[G-2 CACHE] input={} cached=0 miss={} hit_ratio=n/a completion={} reasoning={} cache_creation={}",
+                    u.promptTokens, u.promptTokens, u.completionTokens,
+                    u.reasoningTokens, u.cacheCreationTokens);
+            } else {
+                XAI_LOG_INFO(
+                    "[G-2 CACHE] input={} cached={} miss={} hit_ratio={:.1f}% completion={} reasoning={} cache_creation={}",
+                    u.promptTokens, u.cachedPromptTokens,
+                    u.promptTokens - u.cachedPromptTokens, r * 100.0,
+                    u.completionTokens, u.reasoningTokens, u.cacheCreationTokens);
+            }
+            int pt = u.promptTokens, ct = u.cachedPromptTokens,
+                comp = u.completionTokens, rt = u.reasoningTokens;
+            double ratio = r;
+            QMetaObject::invokeMethod(self.data(),
+                [self, pt, ct, comp, rt, ratio]() {
+                    if (self) emit self->usageUpdated(pt, ct, comp, rt, ratio);
+                },
+                Qt::QueuedConnection);
+        };
         cb.onDone = [self]() {
             if (!self) return;
             // 不在这里 emit finished —— iters 此时尚未返回；

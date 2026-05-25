@@ -31,6 +31,38 @@ cpr::Header buildCommonHeaders(const std::string& chatToken)
     };
 }
 
+// G-2 (2026-05-25): 把任意 OpenAI/Anthropic 风格的 usage 对象解析到 UsageInfo。
+// 兼容字段：
+//   OpenAI:    prompt_tokens / completion_tokens / total_tokens
+//              prompt_tokens_details.cached_tokens
+//              completion_tokens_details.reasoning_tokens
+//   Anthropic: input_tokens / output_tokens
+//              cache_read_input_tokens / cache_creation_input_tokens
+UsageInfo parseUsage(const nlohmann::json& u)
+{
+    UsageInfo ui;
+    // OpenAI 三件套
+    ui.promptTokens     = u.value("prompt_tokens", 0);
+    ui.completionTokens = u.value("completion_tokens", 0);
+    ui.totalTokens      = u.value("total_tokens", 0);
+    // Anthropic 风格映射到 OpenAI 命名
+    if (ui.promptTokens == 0)     ui.promptTokens     = u.value("input_tokens", 0);
+    if (ui.completionTokens == 0) ui.completionTokens = u.value("output_tokens", 0);
+    if (ui.totalTokens == 0)      ui.totalTokens      = ui.promptTokens + ui.completionTokens;
+    // OpenAI cached
+    if (u.contains("prompt_tokens_details") && u["prompt_tokens_details"].is_object()) {
+        ui.cachedPromptTokens = u["prompt_tokens_details"].value("cached_tokens", 0);
+    }
+    // OpenAI reasoning
+    if (u.contains("completion_tokens_details") && u["completion_tokens_details"].is_object()) {
+        ui.reasoningTokens = u["completion_tokens_details"].value("reasoning_tokens", 0);
+    }
+    // Anthropic cache 字段
+    if (ui.cachedPromptTokens == 0) ui.cachedPromptTokens = u.value("cache_read_input_tokens", 0);
+    ui.cacheCreationTokens          = u.value("cache_creation_input_tokens", 0);
+    return ui;
+}
+
 }  // namespace
 
 CopilotChatClient& CopilotChatClient::instance()
@@ -68,6 +100,10 @@ void CopilotChatClient::streamChat(const ChatRequest& req, const ChatStreamCallb
         {"temperature", req.temperature},
     };
     if (req.maxTokens > 0) body["max_tokens"] = req.maxTokens;
+    // G-2 (2026-05-25): 要求 SSE 末尾发 usage chunk；Copilot 透传 OpenAI/Anthropic 字段
+    if (req.stream) {
+        body["stream_options"] = {{"include_usage", true}};
+    }
 
     nlohmann::json msgs = nlohmann::json::array();
     for (const auto& m : req.messages) {
@@ -106,6 +142,10 @@ void CopilotChatClient::streamChat(const ChatRequest& req, const ChatStreamCallb
                     cb.onDelta(msg["content"].get<std::string>());
                 }
             }
+            // G-2: 非流式 usage
+            if (j.contains("usage") && j["usage"].is_object() && cb.onUsage) {
+                cb.onUsage(parseUsage(j["usage"]));
+            }
             if (cb.onDone) cb.onDone();
         } catch (const std::exception& e) {
             if (cb.onError) cb.onError(std::string("解析响应失败: ") + e.what());
@@ -125,6 +165,10 @@ void CopilotChatClient::streamChat(const ChatRequest& req, const ChatStreamCallb
         }
         try {
             auto j = nlohmann::json::parse(data);
+            // G-2: SSE usage chunk（OpenAI 风格：[DONE] 前 choices=[] 带 usage 的 chunk）
+            if (j.contains("usage") && j["usage"].is_object() && cb.onUsage) {
+                cb.onUsage(parseUsage(j["usage"]));
+            }
             if (!j.contains("choices") || j["choices"].empty()) return;
             const auto& choice = j["choices"][0];
             if (choice.contains("delta") && choice["delta"].is_object()) {

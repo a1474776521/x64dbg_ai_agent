@@ -1081,3 +1081,105 @@ x64dbg SDK 的 `_plugin_registercallback` 对同 `(plugin, type)` 后注册者�
 
 - 双架构 Release 编译：x64 + x86 各 0 警告 0 错误，dp64 / dp32 已就位
 - Runtime 实测：留待真实样本回归（未加壳样本走 unpack-helper PHASE 0 应在 ≤3 calls 内返回"建议改用 sample-triage"）
+
+
+## G-2：prompt cache 命中观测（2026-05-25）
+
+### 背景
+
+DeepSeek / Copilot 都支持 prompt caching（system prompt + tools schema 命中后 input token 价 ÷10），但此前无任何观测手段——既不知道是否真有命中，也不知道命中率多少。这导致两个下游问题悬而未决：
+1. G-9 B 档（userTemplate 中文化）会不会破坏 cache 没法量化判断
+2. 优化 system prompt / tools schema 排序的方向是盲改
+
+### 关键勘察发现
+
+- `chat_provider.h::UsageInfo` 原本只有 prompt/completion/total/reasoning 4 字段，**没有 cache 相关字段**
+- DeepSeek 流式分支 **未传** `stream_options.include_usage=true`——按 OpenAI 协议这意味着 SSE 末尾不会发 usage chunk，所以流式调用根本拿不到 token 数
+- DeepSeek 非流式分支 `response.usage` 已被读取（line 225 附近），但**只读了 prompt_tokens/completion_tokens**，未读 `prompt_cache_hit_tokens`
+- Copilot client 同样未传 `include_usage`，且字段名取决于底层模型（OpenAI 风格 vs Anthropic 风格 vs DeepSeek 风格），需运行时兼容
+- `AgentLoop::AgentRunCallbacks` 与 `AgentWorker` 信号系统都没有 usage 通道
+
+### 实施
+
+#### 1) 数据通路（chat_provider.h）
+
+```cpp
+struct UsageInfo {
+    int promptTokens = 0;
+    int completionTokens = 0;
+    int totalTokens = 0;
+    int cachedPromptTokens = 0;
+    int cacheCreationTokens = 0;  // Anthropic 写入 cache 的成本
+    int reasoningTokens = 0;
+    double hitRatio() const {     // -1 表示 promptTokens=0 无法计算
+        return promptTokens > 0
+                 ? double(cachedPromptTokens) / double(promptTokens)
+                 : -1.0;
+    }
+};
+```
+
+`ChatStreamCallbacks` 加可选 `std::function<void(const UsageInfo&)> onUsage`。
+
+#### 2) DeepSeek client（`deepseek_chat_client.cpp`）
+
+- 流式 body 加 `"stream_options": {"include_usage": true}`
+- SSE parser 在 `nlohmann::json::parse(data)` 后先检测 `j.contains("usage")` 而不是直接走 `choices`——usage chunk 的 `choices` 字段是空数组，原 `if (!j.contains("choices") || j["choices"].empty()) return;` 正好把它过滤掉了
+- 非流式分支也补上 cache 字段解析
+
+#### 3) Copilot client（`copilot_chat_client.cpp`）
+
+抽 `parseUsage(const nlohmann::json& u) -> UsageInfo` helper 兼容三套字段命名：
+
+| Provider | input | cached | reasoning | cache_creation |
+|---|---|---|---|---|
+| DeepSeek | `prompt_tokens` | `prompt_cache_hit_tokens` | `completion_tokens_details.reasoning_tokens` | — |
+| OpenAI (Copilot) | `prompt_tokens` | `prompt_tokens_details.cached_tokens` | `completion_tokens_details.reasoning_tokens` | — |
+| Anthropic (Copilot) | `input_tokens` | `cache_read_input_tokens` | — | `cache_creation_input_tokens` |
+
+Helper 先按 OpenAI 命名读，0 时 fallback Anthropic 命名；cache 字段双路径都试一遍。
+
+#### 4) AgentLoop / AgentWorker 透传
+
+- `AgentRunCallbacks::onUsage` 加进结构体
+- `agent_loop.cpp` 在构造 `ChatStreamCallbacks` 时把 `scb.onUsage = cb.onUsage`
+- `AgentWorker` 加 signal：
+
+```cpp
+void usageUpdated(int promptTokens,
+                  int cachedPromptTokens,
+                  int completionTokens,
+                  int reasoningTokens,
+                  double hitRatio);
+```
+
+- 工作线程内通过 `QMetaObject::invokeMethod(..., Qt::QueuedConnection)` 派发到 UI 线程
+
+#### 5) 日志
+
+每次 LLM 调用结束写单行 `[G-2 CACHE]`：
+
+```
+[G-2 CACHE] input=12450 cached=11968 miss=482 hit_ratio=96.1% completion=287 reasoning=0 cache_creation=0
+```
+
+`prompt_tokens=0` 时记 `hit_ratio=n/a`，避免除零。
+
+#### 6) AssistantPanel 显示
+
+- 加成员 `QString lastCacheStatus_` 缓存最近一轮拼好的字符串
+- `setActivePreset()` 在 label 末尾追加 `· input=N cache=N%`（若 `lastCacheStatus_` 非空）
+- usageUpdated signal handler 更新 `lastCacheStatus_` 并 `setActivePreset(activePresetId_)` 重画
+- `agentStatusLabel_->setToolTip` 写完整 4 字段（input / cached / hit_ratio）
+
+### 关键设计取舍
+
+- **流式必须 include_usage**：否则只能在最后一次非流式调用拿到 usage，多轮 agent loop 中间轮全是黑盒
+- **三套字段命名兼容**：因为 Copilot 后端可能路由到任何模型；DeepSeek 也兼容写进 helper 是为了未来可能复用
+- **不新增独立 label**：直接拼在 agentStatusLabel_ 末尾，避免顶栏宽度增加；细节走 ToolTip
+- **不打 tag**：单点改进，挂在 S9 之后，下次 milestone 时再统一打
+
+### 验证
+
+- 双架构 Release 编译：x64 + x86 各 0 警告 0 错误
+- Runtime 实测留待回归，将根据真实 cache hit ratio 决定 G-9 B 档（userTemplate 中文化）是否值得做

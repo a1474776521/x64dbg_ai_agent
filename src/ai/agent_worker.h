@@ -67,6 +67,12 @@ signals:
     void failed(QString error);
     // 达到 maxIter
     void maxIterReached(int iter, int pendingCalls);
+    // G-2 (2026-05-25): 每轮 LLM 调用结束后的 token 用量；hitRatio<0 表示 prompt_tokens=0
+    void usageUpdated(int promptTokens,
+                      int cachedPromptTokens,
+                      int completionTokens,
+                      int reasoningTokens,
+                      double hitRatio);
     // 正常完成
     void finished(int iterations);
 

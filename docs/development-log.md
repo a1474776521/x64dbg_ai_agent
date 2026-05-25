@@ -944,3 +944,71 @@ x64dbg SDK 的 `_plugin_registercallback` 对同 `(plugin, type)` 后注册者�
   - `DbgFunctions()->EnumHandles/GetHandleName/EnumWindows/EnumTcpConnections`（`_dbgfunctions.h:241-258`）
   - `Script::Function::Add(start,end,manual,instructionCount=0)`（`_scriptapi_function.h:19`）
   - `Script::Register::GetCSP()` 才是 duint 栈指针（`_scriptapi_register.h:280`），`GetSP` 是 16 位
+
+---
+
+
+## S9：工具与预设管理 UI 重构 + 分类系统 + 工具描述中文化（2026-05-25）
+
+### 问题 S9.1：PresetEditor 长 QListWidget 平铺过载
+**背景**：S8 后工具数=63、预设数=14，原 PresetEditor 单 QListWidget 平铺所有工具勾选，找特定工具靠肉眼扫；预设列表也是平铺，难以按场景定位。
+
+**方案**（G-10）：
+- 数据层加 `group`（工具功能域，与 ToolCategory 正交）+ `tags`（预设多标签）
+- 工具勾选：`QListWidget` → `QTreeWidget`（group 节点 + 子工具 + 三态勾选）+ 顶部搜索 + Read/Ctrl/Write chip
+- 预设列表：左侧 `QTreeView`（group → 预设）+ 右侧卡片
+- `ToolRegistry` 加 `groupOf / listGroups / listToolsByGroup / categoryOf` 4 个 API
+- `AgentPreset` schema 12 → 13，加 `group` + `tags`；老配置按 id 推断兜底
+
+### 问题 S9.2：出厂预设可改 → 用户误操作丢失
+**方案**：14 个出厂预设全 `readonly=true`；UI 字段全 readOnly + 禁 saveBtn；新增「解锁副本」按钮派生为可编辑用户预设；「恢复出厂」保留所有 readonly=false 用户预设。
+
+### 问题 S9.3：工具按钮 popup menu 信息密度低
+原 toolsBtn_ 是 popup menu，只能列工具名。
+
+**方案**：改造为独立只读对话框 `ToolsBrowserDialog`（`src/ui/tools_browser_dialog.{h,cpp}`）：
+- 4 列树（工具名 / 类别徽标 / 描述 / 当前预设启用 ✓✗）
+- 顶部 badge：`共 N · 当前预设启用 M · 过滤后可见 X 启用 Y`
+- 搜索 + Read/Ctrl/Write chip + 「只显示当前预设启用」复选框
+- 双击叶子 → 680×560 schema 详情对话框
+- 不直接修改预设；底部「打开工作流编辑器…」按钮关闭自身并由 AssistantPanel 调起 PresetEditor
+- 类别徽标色：Read=#6FCF97 / Ctrl=#F2C84B / Write=#EB5C5C
+- `prettyGroupName/prettyCategoryName` 提升为 `PresetEditorDialog` public static 供复用
+
+### 问题 S9.4：工具描述全英文 → 中文用户上手成本高
+**决策（G-9 A 档 · UI only）**：
+- `ITool` 加 `virtual std::string descriptionZh() const { return description(); }`（默认 fallback 英文）
+- `ChatTool` 加 `descriptionZh` 字段；`ToolRegistry::listChatTools()` 填充
+- **LLM 仍读英文 `description()`**：保护 prompt cache + system prompt 英文一致性
+- UI（ToolsBrowserDialog + PresetEditorDialog）显示用 `!descZh.empty() ? descZh : desc` 兜底
+- 63 工具全部加 `descriptionZh() override`（17 个 `*_tools.cpp` 文件）
+
+### 问题 S9.5：QDialog 子树 dark 主题缺失 → 弹窗白底刺眼
+原 QSS 只样式化 `AssistantPanel` 子树。
+
+**方案**：
+- `resources/styles/theme_dark.qss` 追加「Dialog form controls」段：QLabel / QLineEdit / QSpinBox / QDoubleSpinBox（自绘箭头） / QCheckBox（自绘 indicator） / QPlainTextEdit / QTextEdit / QComboBox / QGroupBox（标题盖 #252526 背景） / QTreeWidget / QTreeView（三态 indicator） / QHeaderView::section / QDialogButtonBox
+- 全 QDialog 前缀作用域，避免污染主面板
+- `openPresetManager()` / `openToolsBrowser()` 打开前主动 `setStyleSheet(":/x64dbg-ai/styles/theme_dark.qss")`
+
+### 问题 S9.6：UI 术语不统一（Agent / 预设 / Workflow）
+**决策**：UI 层全面改为「工作流」（更贴合用户视角的"任务流程"概念）：
+- 主按钮 `" Agent"` → `" 工作流"`
+- split menu 「管理预设…」→ 「管理工作流…」
+- ToolsBrowserDialog 底部「打开预设编辑器…」→ 「打开工作流编辑器…」
+- **内部数据结构 `AgentPreset` / `activePresetId_` / `runAgentWithPreset()` 不动**（涉及 JSON 存档 key + 命名空间，不值得为字面统一冒升级风险）
+
+### 问题 S9.7：「只显示当前预设启用」复选框 disabled 无法勾选
+初版逻辑：当 `enabledSet_.empty()`（语义=全部启用）时 disable 复选框，因为"无需过滤"。
+
+**用户反馈**：默认应展示全部，勾选才是过滤，这个 disable 太迷惑。
+
+**修复**（`tools_browser_dialog.cpp:92-98`）：
+- 默认 unchecked（=显示全部）
+- 只要有激活预设就 enable（`!noActivePreset_`）
+- enabledSet 为空时 tooltip 说明「勾选与否结果相同」，UI 不再强制 disable
+- Read/Ctrl/Write chip tooltip 也改为「勾选以显示 X，取消则隐藏」更清楚
+
+### 双架构 Release 编译验证
+- x64 / x86 均零警告通过
+- 工具配对校验：`description() override` 66 处 = `descriptionZh() override` 66 处（含部分文件内辅助类）

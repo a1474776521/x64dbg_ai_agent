@@ -85,6 +85,11 @@ public:
                "handle, type (File/Mutant/Event/Key/...), name, granted_access. "
                "Optional 'type_filter' (case-insensitive substring). Capped at 4096.";
     }
+    std::string descriptionZh() const override
+    {
+        return "枚举被调试进程打开的内核句柄。每条返回 handle、类型（File/Mutant/Event/Key 等）、"
+               "名称、granted_access。可选 'type_filter'（大小写不敏感子串）。上限 4096 条。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -171,6 +176,12 @@ public:
                "tid, class, title, wnd_proc (VA), style, enabled. Use wnd_proc with "
                "set_breakpoint to hook the message handler. Capped at 1024.";
     }
+    std::string descriptionZh() const override
+    {
+        return "枚举被调试进程线程拥有的窗口。每条：hwnd、parent、tid、class、title、"
+               "wnd_proc（VA）、style、enabled。可用 wnd_proc 配合 set_breakpoint hook 消息处理器。"
+               "上限 1024 条。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -251,6 +262,11 @@ public:
         return "List TCP connections of the debuggee (IPv4/IPv6). Each entry has "
                "remote/local addr+port and state text (e.g. ESTABLISHED). UDP not supported.";
     }
+    std::string descriptionZh() const override
+    {
+        return "列出被调试进程的 TCP 连接（IPv4/IPv6）。每条包含本地/远端地址+端口及状态文本"
+               "（如 ESTABLISHED）。暂不支持 UDP。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {{"type","object"},{"properties", nlohmann::json::object()}};
@@ -300,9 +316,9 @@ public:
 
 void registerForensicTools(ToolRegistry& reg)
 {
-    reg.registerTool(std::make_unique<EnumHandlesTool>());
-    reg.registerTool(std::make_unique<EnumWindowsTool>());
-    reg.registerTool(std::make_unique<EnumTcpConnectionsTool>());
+    reg.registerTool(std::make_unique<EnumHandlesTool>(), "forensics");
+    reg.registerTool(std::make_unique<EnumWindowsTool>(), "forensics");
+    reg.registerTool(std::make_unique<EnumTcpConnectionsTool>(), "forensics");
 }
 
 }  // namespace x64ai

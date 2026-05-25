@@ -25,8 +25,9 @@ namespace x64ai {
 // 我们直接持 JSON 文本而不解析，避免在头文件里暴露 nlohmann/json。
 struct ChatTool {
     std::string name;            // 如 "get_disasm"
-    std::string description;     // 给 LLM 看的功能说明
+    std::string description;     // 给 LLM 看的功能说明（英文）
     std::string parametersJson;  // JSON Schema 的字符串（object 顶层）
+    std::string descriptionZh;   // 中文描述（仅 UI 显示用；空时 UI 用 description 兜底）
 };
 
 // ===== LLM 返回的工具调用（流式拼装完成后向上回吐） =====

@@ -46,7 +46,7 @@
   - 已删除老的 `AI 分析当前地址`（被预设系统覆盖）
   - 保留独立条目：`AI 追溯此函数调用链`（调用 TraceDialog）
 - **Plugins 菜单 → x64dbg AI**：相同 AI ▶ 子菜单
-- **AssistantPanel 顶部「Agent」下拉**：手动选预设；下方输入框回车 = 跑当前激活预设
+- **AssistantPanel 顶部「工作流」下拉**：手动选预设；下方输入框回车 = 跑当前激活预设；同排另有「工具列表」按钮浏览全部已注册工具
 
 ### 行为
 1. 拿到当前 CIP / 模块 / 选区，按预设 `userTemplate` 展开 `{{cip}}` `{{module}}` `{{selection}}` `{{disasm}}` `{{user}}` 占位符
@@ -238,7 +238,7 @@
 | `%APPDATA%\x64dbg-ai-plugin\logs\plugin.log` | spdlog 文件输出 | `XAI_LOG_*` 宏 |
 | `%APPDATA%\x64dbg-ai-plugin\logs\write_audit.log` | S3 写工具审计（JSON 一行一条；rotating 4 MB×10） | `util/logging.cpp::auditLog` |
 | `%APPDATA%\x64dbg-ai-plugin\projects\<sha>.db` | 会话 + RAG 数据库 | `SessionStore` |
-| `%APPDATA%\x64dbg-ai-plugin\agent_presets.json` | Agent 预设（schemaVersion=12，S8 后 analyze-function 含全 63 个工具；S8 新增 malware-triage / unpack-helper 两个独立预设；anti-anti-debug 同步扩入 5 个被动诊断工具；预设总数=14） | `PresetStore` |
+| `%APPDATA%\x64dbg-ai-plugin\agent_presets.json` | Agent 预设（schemaVersion=13，含 `group` + `tags`；14 个 readonly 出厂预设，S8 新增 malware-triage / unpack-helper，anti-anti-debug 同步扩入 5 个被动诊断工具） | `PresetStore` |
 | `%APPDATA%\x64dbg-ai-plugin\scripts\` | S5 agent 脚本目录；`list_scripts` / `load_script` / `run_script_file` 相对路径基准 | `util/paths.cpp::pluginScriptsDir` |
 | `%APPDATA%\x64dbg-ai-plugin\secrets\*.bin` | DPAPI 加密的 token/key | `SecretStore` |
 
@@ -403,17 +403,31 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 
 ---
 
-## 12. Agent 预设管理（M4.6a / M4.6e）
+## 12. Agent 工作流（预设）管理（M4.6a / M4.6e / S9 G-10）
 
-### 出厂预设（5 个，readonly）
+> UI 术语：主界面按钮 = 「工作流」；菜单「管理工作流…」；底层数据结构仍叫 `AgentPreset`。
 
-| ID | 名字 | 用途 |
-|---|---|---|
-| `freeform` | 自由对话 | 默认；空 systemPrompt + 全工具，`showInContextMenu=false` |
-| `analyze-function` | 分析当前函数 | 围绕 RIP/EIP 所在函数整体行为分析；含 v4 强约束 |
-| `who-calls-here` | 谁调用了这里 | 重点排查调用方：xref + 调用栈 + trace + 调用点反汇编 |
-| `string-api-context` | 字符串与 API 关联 | 字符串引用与 API 调用聚类（crypto/net/file/anti-debug） |
-| `trace-summary` | Trace 概要 | 配合 Trace 子系统：trace_query 起步 + locate_api_callers/get_disasm 佐证 |
+### 出厂预设（14 个，全 readonly）
+
+| 类别 | 预设 ID |
+|---|---|
+| general | `freeform` / `analyze-function` / `explain-here` |
+| exploration | `map-program` / `cfg-explorer` / `who-calls-here` / `string-api-context` |
+| cracking | `crack-license` / `patch-and-verify` / `anti-anti-debug` |
+| tracing | `trace-summary` / `trace-input` / `annotate-function` |
+| triage | `malware-triage` / `unpack-helper` |
+
+核心预设职责：
+
+| ID | 用途 |
+|---|---|
+| `freeform` | 自由对话；空 systemPrompt + 全工具，`showInContextMenu=false` |
+| `analyze-function` | 围绕 RIP/EIP 所在函数整体行为分析；含 v4 强约束；S8 后含全 63 个工具 |
+| `who-calls-here` | 重点排查调用方：xref + 调用栈 + trace + 调用点反汇编 |
+| `string-api-context` | 字符串引用与 API 调用聚类（crypto/net/file/anti-debug） |
+| `trace-summary` | trace_query 起步 + locate_api_callers/get_disasm 佐证 |
+| `malware-triage` / `unpack-helper` | S8 新增独立预设 |
+| `anti-anti-debug` | S8 同步扩入 5 个被动诊断工具 |
 
 所有出厂预设 `readonly=true`，systemPrompt 末尾强制 `OUTPUT LANGUAGE RULE`（必须 zh-CN，保留代码/地址/寄存器/指令原文）。
 
@@ -424,22 +438,37 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 - **EVIDENCE RULE**（三个都有）：任何关于地址 / 函数体 / 调用关系 / 数据布局的断言必须由本会话**实际做过的工具调用**支撑；未读过的标"推测"或不说。禁止凭"看起来像"虚构调用边。
 - **CONCRETE INPUT RULE**（仅 `analyze-function`）：user prompt 或初始 disasm 上下文有具体入参值时，必须**代入逐步演算并报告结果**，不能只给通用算法描述。
 
-### 预设编辑器（M4.6e PresetEditorDialog）
+### 工作流编辑器（M4.6e PresetEditorDialog + S9 G-10 重构）
 
-入口：`AssistantPanel` 顶部「预设管理」按钮 → modal 1000×660。
+入口：`AssistantPanel` 顶部「工作流」按钮 → split menu → 「管理工作流…」→ modal 1000×660。
 
 | 区域 | 内容 |
 |---|---|
-| 左 | QListWidget 列出全部预设；🔒 前缀 = readonly |
-| 右 | QFormLayout 字段：id（只读）/ name / desc / provider（默认/DeepSeek/Copilot）/ model / maxIter（1–50）/ temperature（0.0–1.5）/ showInContextMenu / systemPrompt（多行）/ userTemplate（多行）/ enabledTools（QListWidget 复选 + 全选/全清） |
-| 底 | 新建（QUuid 短 id）/ 复制副本 / 删除 / 恢复出厂 / 保存 / 关闭 |
+| 左 | `QTreeView`：group → 预设（4 组：general / exploration / cracking / tracing；S8 新增的两条入 triage 隐式扩展） |
+| 右 | 卡片视图（QFormLayout）：id（只读）/ name / desc / group / tags（多选）/ provider（默认/DeepSeek/Copilot）/ model / maxIter（1–50）/ temperature（0.0–1.5）/ showInContextMenu / systemPrompt（多行）/ userTemplate（多行）/ enabledTools（`QTreeWidget` 工具域分组折叠 + 三态勾选 + 顶部搜索 + Read/Ctrl/Write chip 过滤） |
+| 底 | 新建（QUuid 短 id）/ 复制副本 / 解锁副本（readonly→可编辑用户预设）/ 删除 / 恢复出厂 / 保存 / 关闭 |
 
 特性：
-- **readonly 字段全 readOnly + 禁 saveBtn**；仍可删除/复制（复制出的是用户预设可改）
+- **readonly 字段全 readOnly + 禁 saveBtn**；仍可"解锁副本"派生为可编辑用户预设
 - **dirty 跟踪**：切换列表项 / 关闭前若有未保存改动，弹"放弃修改？"确认
 - **enabledTools 空集 = 全部**：UI 全勾时自动归一为空集，AgentRunRequest 透传时空 tools → ToolRegistry 全量
-- **恢复出厂**温和语义：保留所有 `readonly=false` 用户预设，仅覆盖 readonly 那 5 项
+- **工具描述双语显示**：UI 显示优先中文（`descriptionZh()`），LLM 仍读英文（`description()`），不破坏 prompt cache
+- **dark 主题**：对话框打开前主动 `setStyleSheet(":/x64dbg-ai/styles/theme_dark.qss")`；QSS 段覆盖 QDialog 子树常见控件
+- **恢复出厂**温和语义：保留所有 `readonly=false` 用户预设，仅覆盖 readonly 那 14 项
 - 关闭时 `emit changed()` → AssistantPanel 自动 `PresetStore::load() + 重建 Agent 下拉 + rebuildDisasmAiSubmenu() + activePreset 兜底`
+
+### 工具列表对话框（S9 G-10 新增）
+
+入口：`AssistantPanel` 顶部「工具列表」按钮 → modal（只读浏览，**不修改预设**）。
+
+| 区域 | 内容 |
+|---|---|
+| 顶部 badge | `共 N · 当前预设启用 M · 过滤后可见 X 启用 Y` |
+| 过滤 | 搜索框 + Read/Ctrl/Write chip + 「只显示当前预设启用」复选框 |
+| 主体 | 4 列树（工具名 / 类别徽标 Read 绿 #6FCF97 · Ctrl 黄 #F2C84B · Write 红 #EB5C5C / 描述（中文优先）/ 启用 ✓✗） |
+| 底部 | 「打开工作流编辑器…」按钮（关闭自身并由 AssistantPanel 调起 PresetEditor） |
+
+双击叶子 → 680×560 详情对话框，含 JSON schema、所属 group/category、当前预设是否启用。
 
 ### 持久化
 
@@ -447,14 +476,15 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 
 ```json
 {
-  "schemaVersion": 12,
+  "schemaVersion": 13,
   "presets": [{ "id": "...", "name": "...", "systemPrompt": "...", "userTemplate": "...",
                 "enabledTools": ["..."], "maxIter": 20, "temperature": 0.2,
-                "provider": "deepseek", "model": "", "showInContextMenu": true, "readonly": true }]
+                "provider": "deepseek", "model": "", "showInContextMenu": true, "readonly": true,
+                "group": "general", "tags": ["read-only"] }]
 }
 ```
 
-- 启动时 `diskSchema < kPresetSchemaVersion(=12)`：用新版 defaults 覆盖所有 readonly；用户预设保留
+- 启动时 `diskSchema < kPresetSchemaVersion(=13)`：用新版 defaults 覆盖所有 readonly；用户预设保留；schema 12→13 自动按 id 推断 `group`/`tags` 兜底
 - 保存：`rename(.tmp → final)`；rename Access Denied（avast/Defender 抢锁）时 3 次重试 50 ms 间隔 + 原地 ofstream 覆写 fallback
 
 ---

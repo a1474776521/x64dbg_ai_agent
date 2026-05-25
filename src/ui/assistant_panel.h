@@ -101,6 +101,8 @@ private:
     void onCancelAgentClicked();
     // 打开预设管理器
     void openPresetManager();
+    // 打开工具浏览器（S9++：只读工具一览，替代原 toolsMenu_ popup）
+    void openToolsBrowser();
 
     // 切换 agent 运行 UI 状态（按钮 enabled / cancel 可见）
     void setAgentRunning(bool running);

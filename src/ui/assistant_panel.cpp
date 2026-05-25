@@ -41,6 +41,7 @@
 #include "ui/login_dialog.h"
 #include "ui/locator_dialog.h"
 #include "ui/preset_editor_dialog.h"
+#include "ui/tools_browser_dialog.h"
 #include "ui/session_list.h"
 #include "ui/tool_call_card.h"
 #include "ui/trace_dialog.h"
@@ -140,22 +141,23 @@ AssistantPanel::AssistantPanel(QWidget* parent)
 
     // ===== M4.6d Agent split button =====
     agentBtn_ = new QToolButton(this);
-    agentBtn_->setText(QStringLiteral(" Agent"));
+    agentBtn_->setText(QStringLiteral(" 工作流"));
     agentBtn_->setIcon(QIcon(QStringLiteral(":/x64dbg-ai/icons/play.svg")));
-    agentBtn_->setToolTip(QStringLiteral("用当前激活的预设跑一次 Agent（自主多步调工具）"));
+    agentBtn_->setToolTip(QStringLiteral("用当前激活的工作流跑一次 Agent（自主多步调工具）"));
     agentBtn_->setPopupMode(QToolButton::MenuButtonPopup);
     agentBtn_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     agentMenu_ = new QMenu(this);
     agentBtn_->setMenu(agentMenu_);
 
     toolsBtn_ = new QToolButton(this);
-    toolsBtn_->setText(QStringLiteral(" 工具"));
+    toolsBtn_->setText(QStringLiteral(" 工具列表"));
     toolsBtn_->setIcon(QIcon(QStringLiteral(":/x64dbg-ai/icons/tool.svg")));
-    toolsBtn_->setToolTip(QStringLiteral("已注册工具一览（预设的 enabledTools 优先生效）"));
-    toolsBtn_->setPopupMode(QToolButton::InstantPopup);
+    toolsBtn_->setToolTip(QStringLiteral(
+        "查看已注册工具一览（含分组 / 类别 / 描述 / 当前预设启用状态）"));
     toolsBtn_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    toolsMenu_ = new QMenu(this);
-    toolsBtn_->setMenu(toolsMenu_);
+    toolsBtn_->setPopupMode(QToolButton::DelayedPopup);
+    // toolsMenu_ 保留为 nullptr；旧 popup 菜单已废弃，改为 openToolsBrowser() 弹对话框
+    connect(toolsBtn_, &QToolButton::clicked, this, &AssistantPanel::openToolsBrowser);
 
     cancelBtn_ = new QPushButton(QStringLiteral("取消"), this);
     cancelBtn_->setToolTip(QStringLiteral("协作取消正在运行的 Agent"));
@@ -163,7 +165,7 @@ AssistantPanel::AssistantPanel(QWidget* parent)
 
     agentStatusLabel_ = new QLabel(this);
     agentStatusLabel_->setObjectName(QStringLiteral("agentPresetLabel"));
-    agentStatusLabel_->setToolTip(QStringLiteral("当前激活预设；底部聊天框输入回车也按此预设跑"));
+    agentStatusLabel_->setToolTip(QStringLiteral("当前激活工作流；底部聊天框输入回车也按此工作流跑"));
 
     loginBtn_ = new QToolButton(this);
     loginBtn_->setIcon(QIcon(QStringLiteral(":/x64dbg-ai/icons/login.svg")));
@@ -252,7 +254,7 @@ AssistantPanel::AssistantPanel(QWidget* parent)
     // Agent split button：默认动作 = 用当前激活预设跑（userQuery 为空）
     connect(agentBtn_, &QToolButton::clicked, this, [this]() {
         if (activePresetId_.empty()) {
-            chat_->appendSystemNote(QStringLiteral("尚未选择 Agent 预设，请从下拉菜单选择。"));
+            chat_->appendSystemNote(QStringLiteral("尚未选择工作流，请从下拉菜单选择。"));
             return;
         }
         runAgentWithPreset(activePresetId_, QString());
@@ -300,7 +302,7 @@ AssistantPanel::AssistantPanel(QWidget* parent)
         setActivePreset(defId);
     }
     rebuildAgentMenu();
-    rebuildToolsMenu();
+    // toolsMenu 已废弃，工具一览改为 openToolsBrowser() 按需弹窗
 }
 
 AssistantPanel::~AssistantPanel()
@@ -892,7 +894,7 @@ void AssistantPanel::setActivePreset(const std::string& presetId)
     if (opt) {
         agentStatusLabel_->setText(QStringLiteral("[%1]")
                                        .arg(QString::fromStdString(opt->name)));
-        agentBtn_->setToolTip(QStringLiteral("用预设「%1」跑 Agent：%2")
+        agentBtn_->setToolTip(QStringLiteral("用工作流「%1」跑 Agent：%2")
                                   .arg(QString::fromStdString(opt->name),
                                        QString::fromStdString(opt->description)));
     } else {
@@ -920,37 +922,36 @@ void AssistantPanel::rebuildAgentMenu()
     }
 
     agentMenu_->addSeparator();
-    QAction* mgr = agentMenu_->addAction(QStringLiteral("管理预设…"));
+    QAction* mgr = agentMenu_->addAction(QStringLiteral("管理工作流…"));
     connect(mgr, &QAction::triggered, this, &AssistantPanel::openPresetManager);
 }
 
 void AssistantPanel::rebuildToolsMenu()
 {
-    if (!toolsMenu_) return;
-    toolsMenu_->clear();
+    // 旧的工具 popup-menu 已废弃（S9++ 改为 openToolsBrowser() 弹只读对话框）
+    // 保留方法签名以兼容外部潜在调用；内部不做任何事
+}
 
-    auto tools = ToolRegistry::instance().listChatTools();
-    if (tools.empty()) {
-        QAction* a = toolsMenu_->addAction(QStringLiteral("（未注册任何工具）"));
-        a->setEnabled(false);
-        return;
+void AssistantPanel::openToolsBrowser()
+{
+    ToolsBrowserDialog dlg(this, activePresetId_);
+    QFile f(QStringLiteral(":/x64dbg-ai/styles/theme_dark.qss"));
+    if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        dlg.setStyleSheet(QString::fromUtf8(f.readAll()));
     }
-    QAction* hint = toolsMenu_->addAction(QStringLiteral("以下列表仅供查阅，运行时以预设 enabledTools 为准"));
-    hint->setEnabled(false);
-    toolsMenu_->addSeparator();
-    for (const auto& t : tools) {
-        QString label = QString::fromStdString(t.name);
-        QAction* a = toolsMenu_->addAction(label);
-        a->setToolTip(QString::fromStdString(t.description));
-        a->setCheckable(true);
-        a->setChecked(true);   // 仅展示；M4.6e/f 再接预设编辑
-        a->setEnabled(false);
+    dlg.exec();
+    if (dlg.openPresetEditorRequested()) {
+        openPresetManager();
     }
 }
 
 void AssistantPanel::openPresetManager()
 {
     PresetEditorDialog dlg(this);
+    QFile f(QStringLiteral(":/x64dbg-ai/styles/theme_dark.qss"));
+    if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        dlg.setStyleSheet(QString::fromUtf8(f.readAll()));
+    }
     dlg.exec();
     if (dlg.changed()) {
         PresetStore::instance().reload();

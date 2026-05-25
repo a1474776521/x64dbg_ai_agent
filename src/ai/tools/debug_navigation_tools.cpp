@@ -72,6 +72,11 @@ public:
                "pair with wait_for_event to observe the next stop. "
                "Set wait_for_stop=true to block here until Paused/Breakpoint (timeout default 30s).";
     }
+    std::string descriptionZh() const override
+    {
+        return "继续执行（Run）。默认 fire-and-forget 立刻返回 —— 之后用 wait_for_event 观察下次暂停。"
+               "若设 wait_for_stop=true 则阻塞至 Paused/Breakpoint（超时默认 30 秒）。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -130,6 +135,10 @@ public:
         return "Pause the running debuggee (asynchronous interrupt). "
                "Blocks until Paused event or timeout (default 5s).";
     }
+    std::string descriptionZh() const override
+    {
+        return "暂停正在运行的被调试进程（异步中断）。阻塞至 Paused 事件或超时（默认 5 秒）。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -176,6 +185,10 @@ public:
         return "Step out of the current function (until RET executes and control returns to caller). "
                "Blocks until next pause or timeout (default 30s).";
     }
+    std::string descriptionZh() const override
+    {
+        return "跳出当前函数（执行到 RET 返回调用者）。阻塞至下次暂停或超时（默认 30 秒）。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -213,9 +226,9 @@ public:
 
 void registerDebugNavigationTools(ToolRegistry& reg)
 {
-    reg.registerTool(std::make_unique<RunContinueTool>());
-    reg.registerTool(std::make_unique<PauseDebugTool>());
-    reg.registerTool(std::make_unique<StepOutTool>());
+    reg.registerTool(std::make_unique<RunContinueTool>(), "execution-control");
+    reg.registerTool(std::make_unique<PauseDebugTool>(), "execution-control");
+    reg.registerTool(std::make_unique<StepOutTool>(), "execution-control");
 }
 
 }  // namespace x64ai

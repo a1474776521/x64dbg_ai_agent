@@ -124,6 +124,8 @@ set(PLUGIN_SOURCES
     ui/api_key_dialog.h
     ui/tool_confirm_dialog.cpp
     ui/tool_confirm_dialog.h
+    ui/tools_browser_dialog.cpp
+    ui/tools_browser_dialog.h
 
     # util
     util/logging.cpp

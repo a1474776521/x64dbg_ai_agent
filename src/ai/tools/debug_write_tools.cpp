@@ -129,6 +129,13 @@ public:
                "type=hardware installs an HW execute breakpoint (DR0-DR3, limited to 4). "
                "Use this when you need the debuggee to stop at a specific address.";
     }
+    std::string descriptionZh() const override
+    {
+        return "在指定 VA 安装一个断点。"
+               "type=software（默认）安装软件 INT3 断点；"
+               "type=hardware 安装硬件执行断点（DR0-DR3，总数最多 4 个）。"
+               "需要被调试进程停在某个具体地址时使用。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -186,6 +193,10 @@ public:
         return "Remove software AND hardware breakpoint(s) at the given VA. "
                "Returns counts removed of each kind.";
     }
+    std::string descriptionZh() const override
+    {
+        return "删除指定 VA 上的软件断点和硬件断点（两种都清）。返回各类型实际删除的数量。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -234,6 +245,10 @@ public:
         return "Single-step into the next instruction (follow CALL). "
                "Blocks until the debuggee pauses again or timeout (default 30s).";
     }
+    std::string descriptionZh() const override
+    {
+        return "单步步入下一条指令（遇到 CALL 会跟进函数）。阻塞至再次暂停或超时（默认 30 秒）。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -278,6 +293,10 @@ public:
     {
         return "Single-step over the next instruction (skip into CALL bodies). "
                "Blocks until the debuggee pauses again or timeout (default 30s).";
+    }
+    std::string descriptionZh() const override
+    {
+        return "单步步过下一条指令（CALL 不进入子函数体）。阻塞至再次暂停或超时（默认 30 秒）。";
     }
     nlohmann::json parametersSchema() const override
     {
@@ -325,6 +344,11 @@ public:
                "wait for it to hit (timeout 30s), then auto-remove the breakpoint. "
                "If the BP is hit, debuggee remains paused on that instruction. "
                "If timeout, the BP is removed and the debuggee is left in whatever state it is.";
+    }
+    std::string descriptionZh() const override
+    {
+        return "在指定 VA 设置一次性软件断点，运行被调试进程，等待命中（超时 30 秒），命中后自动删除该断点。"
+               "命中时进程暂停在该指令；超时则同样删除断点，但进程保持当时状态不动。";
     }
     nlohmann::json parametersSchema() const override
     {
@@ -399,6 +423,13 @@ public:
                "db/dw/dd/dq). Use named tools (set_breakpoint, step_in, ...) whenever possible; "
                "this is an escape hatch for combinations not yet exposed.";
     }
+    std::string descriptionZh() const override
+    {
+        return "执行一条原生 x64dbg 控制台命令。第一个 token 必须在插件白名单内"
+               "（bp/bpc/bphwc/bpd/bpe、run/StepInto/StepOver/StepOut/pause、db/dw/dd/dq）。"
+               "尽量优先使用具名工具（set_breakpoint、step_in 等）；"
+               "本工具是给尚未独立封装的组合命令的逃生口。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -448,12 +479,12 @@ public:
 
 void registerDebugWriteTools(ToolRegistry& reg)
 {
-    reg.registerTool(std::make_unique<SetBreakpointTool>());
-    reg.registerTool(std::make_unique<RemoveBreakpointTool>());
-    reg.registerTool(std::make_unique<StepInTool>());
-    reg.registerTool(std::make_unique<StepOverTool>());
-    reg.registerTool(std::make_unique<RunUntilTool>());
-    reg.registerTool(std::make_unique<RunDbgCommandTool>());
+    reg.registerTool(std::make_unique<SetBreakpointTool>(), "breakpoint");
+    reg.registerTool(std::make_unique<RemoveBreakpointTool>(), "breakpoint");
+    reg.registerTool(std::make_unique<StepInTool>(), "execution-control");
+    reg.registerTool(std::make_unique<StepOverTool>(), "execution-control");
+    reg.registerTool(std::make_unique<RunUntilTool>(), "execution-control");
+    reg.registerTool(std::make_unique<RunDbgCommandTool>(), "write-patch");
 }
 
 }  // namespace x64ai

@@ -91,6 +91,13 @@ public:
                "Use load_script(path) to inspect contents (note: load opens the Script tab; "
                "you can read file contents with read_string or via the host file system).";
     }
+    std::string descriptionZh() const override
+    {
+        return "列出 %APPDATA%\\x64dbg-ai-plugin\\scripts\\ 下可用的脚本文件。"
+               "每个 *.txt / *.script 条目返回 name / size_bytes / mtime_ms。"
+               "可用 load_script(path) 查看内容（load 会切到 Script 标签页；"
+               "也可通过 read_string 或宿主文件系统直接读文件内容）。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -139,6 +146,12 @@ public:
                "path: relative -> resolved against %APPDATA%\\x64dbg-ai-plugin\\scripts\\, "
                "absolute -> used as-is. Caller should preview the script via the file system "
                "before loading. Use run_script_file to also execute.";
+    }
+    std::string descriptionZh() const override
+    {
+        return "把脚本加载到 x64dbg 的 Script 标签页，但不执行。"
+               "path：相对路径解析到 %APPDATA%\\x64dbg-ai-plugin\\scripts\\，绝对路径原样使用。"
+               "加载前调用方应先通过文件系统预览脚本。要同时执行请用 run_script_file。";
     }
     nlohmann::json parametersSchema() const override
     {
@@ -205,6 +218,13 @@ public:
                "(Paused/Breakpoint) or follow up with read_memory/get_registers. "
                "path resolution and size limit are identical to load_script.";
     }
+    std::string descriptionZh() const override
+    {
+        return "把脚本加载到 Script 标签页并立刻执行（fire-and-forget）。"
+               "x64dbg 脚本引擎没有 'finished' 事件，工具触发 Run 后立刻返回。"
+               "要观察结果请配合 wait_for_event（Paused/Breakpoint）或随后调 read_memory/get_registers。"
+               "path 解析规则和大小上限与 load_script 一致。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -259,9 +279,9 @@ public:
 
 void registerScriptTools(ToolRegistry& reg)
 {
-    reg.registerTool(std::make_unique<ListScriptsTool>());
-    reg.registerTool(std::make_unique<LoadScriptTool>());
-    reg.registerTool(std::make_unique<RunScriptFileTool>());
+    reg.registerTool(std::make_unique<ListScriptsTool>(), "agent-meta");
+    reg.registerTool(std::make_unique<LoadScriptTool>(), "agent-meta");
+    reg.registerTool(std::make_unique<RunScriptFileTool>(), "agent-meta");
 }
 
 }  // namespace x64ai

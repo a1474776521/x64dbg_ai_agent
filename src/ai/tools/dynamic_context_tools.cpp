@@ -85,6 +85,12 @@ public:
                "stack pointer, and a resolved symbol when available. "
                "Frame 0 is the current (innermost) frame; the last entry is the outermost caller.";
     }
+    std::string descriptionZh() const override
+    {
+        return "获取当前线程在断点/暂停时刻的调用栈快照。"
+               "每帧包含返回地址（from）、调用目标（to）、栈指针，以及可解析的符号。"
+               "Frame 0 为当前最内层帧，最后一条为最外层调用者。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -163,6 +169,12 @@ public:
                "Returns call/ret events captured by the M3.2 trace subsystem. "
                "Filter by event kind (call/ret/any), VA range, and limit. "
                "Returns failure if trace is not active and has no recorded events.";
+    }
+    std::string descriptionZh() const override
+    {
+        return "查询 TraceRecorder 中记录的追踪事件（call/ret 等）。"
+               "可按事件类型（call/ret/any）、VA 区间、上限数量过滤。"
+               "若追踪未启用且无任何已录事件，返回失败。";
     }
     nlohmann::json parametersSchema() const override
     {
@@ -281,6 +293,12 @@ public:
                "Pass the API name (case-insensitive, e.g. 'CreateFileW', 'send', 'recv'). "
                "Returns matched HeuristicHit entries (one per call site).";
     }
+    std::string descriptionZh() const override
+    {
+        return "在主模块中查找对指定导入 API 的所有调用点（静态 IAT 交叉引用扫描）。"
+               "API 名大小写不敏感，例如 'CreateFileW'、'send'、'recv'。"
+               "返回 HeuristicHit 列表（每个调用点一条）。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -381,6 +399,13 @@ public:
                "Returns previously captured disassembly snippets, strings, API hits, and notes. "
                "Use this to recall prior analysis instead of re-deriving from scratch.";
     }
+    std::string descriptionZh() const override
+    {
+        return "在当前项目的 RAG 知识库中搜索与查询相关的片段。"
+               "使用已为该被调试进程存储的 embedding 进行余弦距离向量检索。"
+               "可召回历史的反汇编片段、字符串、API 命中点和分析笔记。"
+               "用于复用以前的分析结果，避免重复推导。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -457,10 +482,10 @@ public:
 
 void registerDynamicAndContextTools(ToolRegistry& reg)
 {
-    reg.registerTool(std::make_unique<GetCallStackTool>());
-    reg.registerTool(std::make_unique<TraceQueryTool>());
-    reg.registerTool(std::make_unique<LocateApiCallersTool>());
-    reg.registerTool(std::make_unique<RagSearchTool>());
+    reg.registerTool(std::make_unique<GetCallStackTool>(), "register-stack");
+    reg.registerTool(std::make_unique<TraceQueryTool>(), "agent-meta");
+    reg.registerTool(std::make_unique<LocateApiCallersTool>(), "agent-meta");
+    reg.registerTool(std::make_unique<RagSearchTool>(), "agent-meta");
 }
 
 }  // namespace x64ai

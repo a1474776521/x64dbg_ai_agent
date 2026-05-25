@@ -95,6 +95,11 @@ public:
         return "List all byte-level patches applied so far. Optional 'module' filter "
                "(case-insensitive substring). Each entry = one byte diff. Capped at 4096.";
     }
+    std::string descriptionZh() const override
+    {
+        return "列出至今为止所有的字节级补丁。可选 'module' 过滤（大小写不敏感子串）。"
+               "每条返回一处单字节差异。上限 4096 条。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -184,6 +189,11 @@ public:
         return "Restore the original byte at VA, undoing a single-byte patch. "
                "Returns false if no patch at that VA. Use list_patches to find addresses.";
     }
+    std::string descriptionZh() const override
+    {
+        return "把 VA 处的字节还原为原始值，撤销一处单字节补丁。"
+               "该 VA 没有补丁时返回 false。可先用 list_patches 找到所有补丁地址。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -227,6 +237,11 @@ public:
         return "Render an x64dbg format template using current debuggee state. "
                "Supports expressions like '{rax}', '{x:[rsp+8]}', '{s:[rcx]}'. "
                "Output capped at 4 KB.";
+    }
+    std::string descriptionZh() const override
+    {
+        return "用当前被调试进程的状态渲染一段 x64dbg 格式字符串模板。"
+               "支持 '{rax}'、'{x:[rsp+8]}'、'{s:[rcx]}' 等表达式。输出上限 4 KB。";
     }
     nlohmann::json parametersSchema() const override
     {
@@ -280,6 +295,10 @@ public:
         return "Scroll the disassembly view to VA and highlight it. "
                "No effect on execution. Use to guide the user's attention.";
     }
+    std::string descriptionZh() const override
+    {
+        return "把反汇编视图滚动到指定 VA 并高亮。不影响执行。用于引导用户视线。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -315,6 +334,10 @@ public:
     {
         return "Scroll the dump view to VA. Optional 'index' selects Dump 1..5. "
                "No effect on execution.";
+    }
+    std::string descriptionZh() const override
+    {
+        return "把内存 Dump 视图滚动到指定 VA。可选 'index' 选择 Dump 1..5。不影响执行。";
     }
     nlohmann::json parametersSchema() const override
     {
@@ -354,11 +377,11 @@ public:
 
 void registerPatchMiscTools(ToolRegistry& reg)
 {
-    reg.registerTool(std::make_unique<ListPatchesTool>());
-    reg.registerTool(std::make_unique<RestorePatchTool>());
-    reg.registerTool(std::make_unique<FormatWithDbgTool>());
-    reg.registerTool(std::make_unique<GuiFocusDisasmTool>());
-    reg.registerTool(std::make_unique<GuiFocusDumpTool>());
+    reg.registerTool(std::make_unique<ListPatchesTool>(), "write-patch");
+    reg.registerTool(std::make_unique<RestorePatchTool>(), "write-patch");
+    reg.registerTool(std::make_unique<FormatWithDbgTool>(), "gui-misc");
+    reg.registerTool(std::make_unique<GuiFocusDisasmTool>(), "gui-misc");
+    reg.registerTool(std::make_unique<GuiFocusDumpTool>(), "gui-misc");
 }
 
 }  // namespace x64ai

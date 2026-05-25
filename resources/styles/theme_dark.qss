@@ -211,3 +211,177 @@ QInputDialog QLineEdit {
     color: #d4d4d4;
 }
 QInputDialog QLineEdit:focus { border-color: #007acc; }
+
+/* ===== Dialog form controls (PresetEditorDialog 等) ===== */
+/* 仅作用于 QDialog 内，避免污染主面板 */
+
+QDialog QLabel { color: #d4d4d4; }
+
+QDialog QLineEdit {
+    background-color: #2d2d30;
+    color: #e6e6e6;
+    border: 1px solid #3c3c3c;
+    border-radius: 4px;
+    padding: 4px 8px;
+    selection-background-color: #264f78;
+}
+QDialog QLineEdit:focus            { border-color: #007acc; }
+QDialog QLineEdit:read-only        { background-color: #252526; color: #9da5b4; }
+QDialog QLineEdit:disabled         { background-color: #252526; color: #6a6a6a; }
+
+QDialog QSpinBox, QDialog QDoubleSpinBox {
+    background-color: #2d2d30;
+    color: #e6e6e6;
+    border: 1px solid #3c3c3c;
+    border-radius: 4px;
+    padding: 3px 6px;
+    selection-background-color: #264f78;
+}
+QDialog QSpinBox:focus, QDialog QDoubleSpinBox:focus {
+    border-color: #007acc;
+}
+QDialog QSpinBox:disabled, QDialog QDoubleSpinBox:disabled {
+    background-color: #252526; color: #6a6a6a;
+}
+QDialog QSpinBox::up-button, QDialog QSpinBox::down-button,
+QDialog QDoubleSpinBox::up-button, QDialog QDoubleSpinBox::down-button {
+    background-color: #3c3c3c;
+    border: none;
+    width: 16px;
+}
+QDialog QSpinBox::up-button:hover, QDialog QSpinBox::down-button:hover,
+QDialog QDoubleSpinBox::up-button:hover, QDialog QDoubleSpinBox::down-button:hover {
+    background-color: #094771;
+}
+QDialog QSpinBox::up-arrow, QDialog QDoubleSpinBox::up-arrow {
+    image: none;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 5px solid #d4d4d4;
+    width: 0; height: 0;
+}
+QDialog QSpinBox::down-arrow, QDialog QDoubleSpinBox::down-arrow {
+    image: none;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #d4d4d4;
+    width: 0; height: 0;
+}
+
+QDialog QCheckBox { color: #e6e6e6; spacing: 6px; }
+QDialog QCheckBox::indicator {
+    width: 14px; height: 14px;
+    border: 1px solid #555;
+    border-radius: 3px;
+    background-color: #2d2d30;
+}
+QDialog QCheckBox::indicator:hover     { border-color: #007acc; }
+QDialog QCheckBox::indicator:checked   {
+    background-color: #0e639c;
+    border-color: #0e639c;
+    image: none;
+}
+QDialog QCheckBox::indicator:disabled  { background-color: #252526; border-color: #3c3c3c; }
+
+QDialog QPlainTextEdit, QDialog QTextEdit {
+    background-color: #1e1e1e;
+    color: #e6e6e6;
+    border: 1px solid #3c3c3c;
+    border-radius: 4px;
+    selection-background-color: #264f78;
+    padding: 6px;
+}
+QDialog QPlainTextEdit:focus, QDialog QTextEdit:focus  { border-color: #007acc; }
+QDialog QPlainTextEdit:read-only, QDialog QTextEdit:read-only {
+    background-color: #252526; color: #b8b8b8;
+}
+
+QDialog QComboBox {
+    background-color: #2d2d30;
+    color: #e6e6e6;
+    border: 1px solid #3c3c3c;
+    border-radius: 4px;
+    padding: 3px 8px;
+    min-height: 20px;
+}
+QDialog QComboBox:focus    { border-color: #007acc; }
+QDialog QComboBox:disabled { background-color: #252526; color: #6a6a6a; }
+
+/* ===== GroupBox（工具区外框） ===== */
+QGroupBox {
+    background-color: transparent;
+    color: #e6e6e6;
+    border: 1px solid #3c3c3c;
+    border-radius: 6px;
+    margin-top: 14px;
+    padding-top: 6px;
+    font-weight: 600;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    padding: 0 6px;
+    background-color: #252526;
+    color: #cccccc;
+}
+
+/* ===== TreeWidget（左侧预设树 + 工具树） ===== */
+QTreeWidget, QTreeView {
+    background-color: #1e1e1e;
+    alternate-background-color: #232323;
+    color: #d4d4d4;
+    border: 1px solid #3c3c3c;
+    border-radius: 4px;
+    outline: 0;
+    selection-background-color: #094771;
+    selection-color: #ffffff;
+    show-decoration-selected: 1;
+}
+QTreeWidget::item, QTreeView::item {
+    padding: 3px 2px;
+    border: none;
+}
+QTreeWidget::item:hover, QTreeView::item:hover {
+    background-color: #2a2d2e;
+}
+QTreeWidget::item:selected, QTreeView::item:selected {
+    background-color: #094771;
+    color: #ffffff;
+}
+QTreeWidget::branch:has-children:!has-siblings:closed,
+QTreeWidget::branch:closed:has-children:has-siblings,
+QTreeView::branch:has-children:!has-siblings:closed,
+QTreeView::branch:closed:has-children:has-siblings {
+    border-image: none;
+    image: none;
+}
+QTreeWidget::indicator, QTreeView::indicator {
+    width: 14px; height: 14px;
+    border: 1px solid #666;
+    border-radius: 3px;
+    background-color: #2d2d30;
+}
+QTreeWidget::indicator:checked, QTreeView::indicator:checked {
+    background-color: #0e639c;
+    border-color: #0e639c;
+}
+QTreeWidget::indicator:indeterminate, QTreeView::indicator:indeterminate {
+    background-color: #555;
+    border-color: #888;
+}
+
+/* ===== HeaderView（工具树表头） ===== */
+QHeaderView::section {
+    background-color: #2d2d30;
+    color: #cccccc;
+    border: none;
+    border-right: 1px solid #3c3c3c;
+    border-bottom: 1px solid #3c3c3c;
+    padding: 4px 8px;
+    font-weight: 600;
+}
+QHeaderView::section:hover { background-color: #094771; color: #ffffff; }
+
+/* ===== DialogButtonBox ===== */
+QDialogButtonBox QPushButton { min-width: 72px; }

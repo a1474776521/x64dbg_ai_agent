@@ -35,6 +35,9 @@ public:
     // === 元信息（用于 ChatTool / 给 LLM 看的 schema） ===
     virtual std::string name() const = 0;
     virtual std::string description() const = 0;
+    // 中文描述（仅 UI 显示用；LLM 仍读 description()）。
+    // 默认 fall back 到英文 description()；各工具子类可 override 提供中文。
+    virtual std::string descriptionZh() const { return description(); }
 
     // JSON Schema（object 顶层），形如：
     //   { "type":"object","properties":{...},"required":[...] }

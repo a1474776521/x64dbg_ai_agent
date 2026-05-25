@@ -4,7 +4,7 @@
 > **每次完成一个 S 段后，更新本表的 ✅/❌ 列 + Done 行**。
 > 横向对照：[features.md](features.md) 是最终能力快照；本文件是规划+进度。
 
-最后更新：2026-05-24（S8 完成；下一步 S9 = G-10 工具与预设管理 UI 重构）
+最后更新：2026-05-25（**S9 完成** = G-10 工具与预设管理 UI 重构 + 分类系统 + 工具描述中文化）
 
 ---
 
@@ -200,12 +200,12 @@
 | G-2 | 验证 DeepSeek / Copilot prompt caching 是否启用（system prompt + tools 缓存命中后 input 价 ÷10） | P0 | ❌ | S6 完成后立即查 |
 | G-3 | `AgentWorker` 加 `maxToolCalls=30` 配置（与 maxIter 区分） | P1 | ❌ | S7 |
 | G-4 | system prompt 加"同义工具决策树"（step_in/over/out/run_until/run_continue 何时用谁） | P1 | ❌ | S6 完成后 |
-| G-5 | PresetEditor UI 加"代价提示"：勾工具时显示"预计 +X tokens/轮"（**并入 G-10**） | P2 | ❌ | S8 |
-| G-6 | PresetEditor UI 加"工具分组开关"：按 category 整组勾选（**并入 G-10**） | P2 | ❌ | S8 |
+| G-5 | PresetEditor UI 加"代价提示"：勾工具时显示"预计 +X tokens/轮"（**并入 G-10**） | P2 | ✅ | S9 |
+| G-6 | PresetEditor UI 加"工具分组开关"：按 category 整组勾选（**并入 G-10**） | P2 | ✅ | S9 |
 | G-7 | write_audit.log 旁加 metrics 计数（read 工具不写大日志，只记总次数） | P3 | ❌ | 视需要 |
 | G-8 | （研究类）动态工具子集：第一轮 `request_tools(["category"])` 按需解锁 | P3 | ❌ | 实现复杂，暂不做 |
-| G-9 | 工具/预设描述与 userTemplate 中文化（详情见 5.3） | P2 | ❌ | S7 之后单独评估 |
-| **G-10** | **工具与预设管理界面重构 + 分类系统**（详情见 5.4） | **P1** | ❌ | **S8 完成后立即排期；用户 2026-05-24 明确提出** |
+| G-9 | 工具/预设描述与 userTemplate 中文化（详情见 5.3） | P2 | ✅（A 档 · UI only） | S9 |
+| **G-10** | **工具与预设管理界面重构 + 分类系统**（详情见 5.4） | **P1** | ✅ | **S9 完成 2026-05-25** |
 
 ### 5.2 治理原则（S6/S7/S8 实施时附带遵守）
 
@@ -287,3 +287,25 @@ S6 期间用户提出"全量中文化"诉求。结论 **暂不做，先收尾 S6
 4. 新建预设默认 group=`general`、tags=[]，可在 UI 编辑。
 
 **拆分到 S9（独立阶段）执行**：S8 先把 P2 场景化工具实现完，G-10 紧接 S8 后作为 **S9 = "UI + 分类治理"** 单独立项，避免和工具堆积纠缠。
+
+### 5.5 S9 落地实况（2026-05-25 完成）
+
+**实际工具规模**：63 工具 / 注册条目 68 / 预设 14 / schema 13。
+
+**完成项**：
+- **数据层**：`ToolRegistry` 增 `groupOf / listGroups / listToolsByGroup / categoryOf` 4 个 API；`AgentPreset` schema 12 → 13，加 `group` + `tags` + `readonly`（出厂 14 预设全 `readonly=true`）。
+- **PresetEditor 重做**（`preset_editor_dialog.cpp`）：
+  - 左侧 `QTreeView`（group → 预设），右侧详情卡
+  - 工具勾选改 `QTreeWidget` 分组折叠 + 三态勾选 + 顶部搜索 + Read/Ctrl/Write chip 过滤
+  - 卡片显示 tools 数、provider、tags、🔒 锁标
+  - 出厂预设可"解锁副本"派生为可编辑用户预设
+- **新增「工具列表」对话框**（`tools_browser_dialog.h/.cpp`）：从 popup menu 改造为只读 4 列树（工具名 / 类别徽标 / 描述 / 当前预设启用 ✓✗），顶部 badge + 搜索 + chip + 「只显示当前预设启用」复选框；双击叶子展示自带 schema 详情。
+- **G-9 工具描述中文化（A 档 · UI only）**：`ITool` 加 `virtual std::string descriptionZh()`（默认 fallback 英文）；`ChatTool` 加 `descriptionZh` 字段。所有 63 工具补齐中文 override。**LLM 仍读英文 description**，UI 显示优先中文，避免破坏 prompt cache 与 system prompt 英文一致性。
+- **dark 主题修复**：`theme_dark.qss` 追加 `QDialog` 子树控件段（QLabel/QLineEdit/QSpinBox/QCheckBox/QGroupBox/QTreeWidget/QHeaderView::section/QDialogButtonBox 等）；两个对话框打开前 `setStyleSheet(":/x64dbg-ai/styles/theme_dark.qss")` 注入。
+- **UI 文案统一**：主界面 `Agent` 按钮 → 「工作流」；菜单「管理预设…」→「管理工作流…」；工具列表底部「打开预设编辑器…」→「打开工作流编辑器…」（内部数据结构 `AgentPreset` 名称未改，仅 UI 字面）。
+
+**未做 / 推迟**：
+- G-5 token 估算 badge：UI 卡片暂只显示 "N tools"，未做 token 估算（依赖 G-2 prompt-cache 验证后才有意义）
+- G-7 metrics 计数：低优先级延后
+- G-8 动态工具子集：复杂，不做
+- 预设 `userTemplate` 中文化（G-9 B 档）：本阶段未涉及，待回归后单独评估

@@ -173,7 +173,7 @@ public:
 
 void registerCfgTools(ToolRegistry& reg)
 {
-    reg.registerTool(std::make_unique<GetCfgTool>());
+    reg.registerTool(std::make_unique<GetCfgTool>(), "disasm-cfg");
 }
 
 }  // namespace x64ai

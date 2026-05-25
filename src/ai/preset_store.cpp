@@ -91,6 +91,8 @@ void PresetStore::reload()
         for (const auto& je : *arr) {
             auto p = AgentPreset::fromJson(je);
             if (p.id.empty() || p.name.empty()) continue;
+            // S9：用户自定义预设若无 group（升迁自 v12 及更早），兜底 "general"
+            if (p.group.empty()) p.group = "general";
             presets_.push_back(std::move(p));
         }
         XAI_LOG_INFO("PresetStore: loaded {} preset(s) from '{}' (disk schema v{}, code v{})",

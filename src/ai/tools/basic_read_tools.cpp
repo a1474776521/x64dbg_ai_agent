@@ -122,6 +122,11 @@ public:
                "Returns each line with VA, raw bytes, and mnemonic. "
                "Use this to inspect any code region (function body, sub-call target, jump destination).";
     }
+    std::string descriptionZh() const override
+    {
+        return "从指定虚拟地址开始反汇编 N 条指令。每行返回 VA、原始字节和助记符。"
+               "用于查看任意代码区域（函数体、子调用目标、跳转目的地等）。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -216,6 +221,11 @@ public:
                "Returns a hex+ASCII dump (16 bytes per row). "
                "Use this to inspect data structures, strings (prefer read_string), or pointed-to buffers.";
     }
+    std::string descriptionZh() const override
+    {
+        return "从被调试进程的指定虚拟地址读取原始字节。返回 hex+ASCII 双栏 dump（每行 16 字节）。"
+               "用于检查数据结构、字符串（字符串建议优先用 read_string）或指针指向的缓冲区。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -288,6 +298,12 @@ public:
                "Auto-detects ANSI (UTF-8) or UTF-16LE based on x64dbg's heuristic. "
                "Use this when a pointer / immediate looks like a string reference.";
     }
+    std::string descriptionZh() const override
+    {
+        return "读取指定虚拟地址处的 C 风格 NUL 结尾字符串。"
+               "依 x64dbg 的启发式自动判断 ANSI（UTF-8）或 UTF-16LE。"
+               "当某个指针/立即数看起来像字符串引用时用此工具。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -337,6 +353,11 @@ public:
         return "Get the current thread's general-purpose registers (CPU + flags + segment). "
                "Use this to inspect program state at a breakpoint, check call arguments, "
                "or examine the result of an instruction.";
+    }
+    std::string descriptionZh() const override
+    {
+        return "获取当前线程的通用寄存器（CPU 寄存器 + 标志位 + 段寄存器）快照。"
+               "用于在断点处检查程序状态、查看调用参数、或确认某条指令的执行结果。";
     }
     nlohmann::json parametersSchema() const override
     {
@@ -402,6 +423,12 @@ public:
                "Returns name, base, size, and entry point for each. "
                "Use this to find the main module / DLL of interest before drilling down.";
     }
+    std::string descriptionZh() const override
+    {
+        return "列出被调试进程当前加载的所有模块。"
+               "每条返回模块名、基址、大小、入口点。"
+               "通常用于在进一步分析前先定位主模块或目标 DLL。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -465,6 +492,13 @@ public:
                "module-relative symbols (kernel32.GetProcAddress), and hex/decimal literals. "
                "Use this whenever you need to compute an address or read a small typed value "
                "instead of doing math yourself.";
+    }
+    std::string descriptionZh() const override
+    {
+        return "在被调试进程上下文中求值一个 x64dbg 表达式。"
+               "支持算术运算（+ - * /）、解引用 [expr]、寄存器（rax/eip 等）、"
+               "模块相对符号（如 kernel32.GetProcAddress）以及十六进制/十进制字面量。"
+               "需要计算地址或读取小段类型化数据时优先用本工具，避免自己手算。";
     }
     nlohmann::json parametersSchema() const override
     {
@@ -533,6 +567,12 @@ public:
                "Returns address, type, enabled/active state, hit count, module and name. "
                "Use this to confirm a breakpoint was set, audit existing breakpoints, "
                "or pick one to delete.";
+    }
+    std::string descriptionZh() const override
+    {
+        return "列出当前所有已安装的断点（软件 / 硬件 / 内存 / DLL / 异常）。"
+               "每条返回地址、类型、启用/激活状态、命中次数、所在模块与名称。"
+               "用于确认断点已设置、审计现有断点、或挑选要删除的断点。";
     }
     nlohmann::json parametersSchema() const override
     {
@@ -617,13 +657,13 @@ public:
 
 void registerBasicReadTools(ToolRegistry& reg)
 {
-    reg.registerTool(std::make_unique<GetDisasmTool>());
-    reg.registerTool(std::make_unique<ReadMemoryTool>());
-    reg.registerTool(std::make_unique<ReadStringTool>());
-    reg.registerTool(std::make_unique<GetRegistersTool>());
-    reg.registerTool(std::make_unique<ListModulesTool>());
-    reg.registerTool(std::make_unique<EvalExpressionTool>());
-    reg.registerTool(std::make_unique<ListBreakpointsTool>());
+    reg.registerTool(std::make_unique<GetDisasmTool>(), "disasm-cfg");
+    reg.registerTool(std::make_unique<ReadMemoryTool>(), "memory-search");
+    reg.registerTool(std::make_unique<ReadStringTool>(), "memory-search");
+    reg.registerTool(std::make_unique<GetRegistersTool>(), "register-stack");
+    reg.registerTool(std::make_unique<ListModulesTool>(), "static-info");
+    reg.registerTool(std::make_unique<EvalExpressionTool>(), "register-stack");
+    reg.registerTool(std::make_unique<ListBreakpointsTool>(), "breakpoint");
 }
 
 }  // namespace x64ai

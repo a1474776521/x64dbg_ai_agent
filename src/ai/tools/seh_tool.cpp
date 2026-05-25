@@ -101,7 +101,7 @@ public:
 
 void registerSehTool(ToolRegistry& reg)
 {
-    reg.registerTool(std::make_unique<GetSehChainTool>());
+    reg.registerTool(std::make_unique<GetSehChainTool>(), "anti-debug-insight");
 }
 
 }  // namespace x64ai

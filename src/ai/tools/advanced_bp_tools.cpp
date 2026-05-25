@@ -76,6 +76,12 @@ public:
                "Only 4 HW BPs total (DR0-DR3); over-limit silently fails. "
                "Use for data tracing (write/access) or stealth code BP.";
     }
+    std::string descriptionZh() const override
+    {
+        return "设置硬件断点。type ∈ {execute=执行 / write=写入 / access=访问}。"
+               "总共最多 4 个硬件断点（DR0-DR3），超限会静默失败。"
+               "适合数据追踪（写入/访问）或反检测的代码断点。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -132,6 +138,10 @@ public:
     {
         return "Delete a hardware breakpoint at address. No-op if none exists at that VA.";
     }
+    std::string descriptionZh() const override
+    {
+        return "删除指定地址的硬件断点。该地址若无硬件断点则不做任何事。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -169,6 +179,12 @@ public:
                "fastResume, silent. The BP MUST exist (call set_breakpoint first). "
                "Empty string ('') clears a text field. Numeric expressions are x64dbg expressions, "
                "e.g. condition='rax==0x42'.";
+    }
+    std::string descriptionZh() const override
+    {
+        return "配置已存在软件断点的高级字段：break/log/command 条件、fastResume、silent。"
+               "断点必须已存在（先调用 set_breakpoint）。空串 '' 表示清除该文本字段。"
+               "条件表达式按 x64dbg 表达式语法，例如 condition='rax==0x42'。";
     }
     nlohmann::json parametersSchema() const override
     {
@@ -245,9 +261,9 @@ public:
 
 void registerAdvancedBpTools(ToolRegistry& reg)
 {
-    reg.registerTool(std::make_unique<SetHwBreakpointTool>());
-    reg.registerTool(std::make_unique<RemoveHwBreakpointTool>());
-    reg.registerTool(std::make_unique<SetConditionalBpTool>());
+    reg.registerTool(std::make_unique<SetHwBreakpointTool>(), "breakpoint");
+    reg.registerTool(std::make_unique<RemoveHwBreakpointTool>(), "breakpoint");
+    reg.registerTool(std::make_unique<SetConditionalBpTool>(), "breakpoint");
 }
 
 }  // namespace x64ai

@@ -17,6 +17,8 @@
 #include <QDialog>
 #include <QVector>
 
+class QTreeWidget;
+class QTreeWidgetItem;
 class QListWidget;
 class QListWidgetItem;
 class QLineEdit;
@@ -26,6 +28,8 @@ class QDoubleSpinBox;
 class QCheckBox;
 class QComboBox;
 class QPushButton;
+class QLabel;
+class QToolButton;
 
 namespace x64ai {
 
@@ -45,6 +49,14 @@ private slots:
     void onResetDefaultsClicked();
     void onSaveCurrentClicked();
     void onCloseClicked();
+    void onToggleLockClicked();   // S9+：解锁/重新锁定 readonly 预设
+    // S9++：表单化工具区
+    void onToolsContextMenu(const QPoint& pos);
+    void onToolItemDoubleClicked(QTreeWidgetItem* item, int column);
+    // S9：工具勾选 UI
+    void onToolSearchChanged(const QString& text);
+    void onToolFilterChipToggled();
+    void onToolGroupItemChanged(QTreeWidgetItem* item, int column);
 
 private:
     void buildUi();
@@ -57,9 +69,22 @@ private:
     void loadEnabledTools(const std::vector<std::string>& enabled);
     std::vector<std::string> collectEnabledTools() const;
     static QString makeListItemLabel(const AgentPreset& p);
+    // S9：分组渲染
+    void buildToolsTree();                    // 一次性构建 group → tool 三态树
+    void applyToolFilter();                   // 根据 search + chip 隐藏/显示叶子
+    void updateBadge(const AgentPreset& p);   // 右上 badge：工具数 · group · tags · provider · 🔒
+    void updateToolsCount();                  // S9++：刷新「已勾选 N/M」
+    void showToolDetails(QTreeWidgetItem* leaf);  // S9++：双击叶子弹完整详情
 
-    // 左侧
-    QListWidget* listWidget_ = nullptr;
+public:
+    // 复用辅助（ToolsBrowserDialog 等需要）
+    static QString prettyGroupName(const std::string& g);
+    static QString prettyCategoryName(int cat);  // ToolCategory enum int
+
+private:
+
+    // 左侧 —— S9：QTreeWidget(group → preset)
+    QTreeWidget* listWidget_ = nullptr;
     QPushButton* newBtn_     = nullptr;
     QPushButton* cloneBtn_   = nullptr;
     QPushButton* deleteBtn_  = nullptr;
@@ -76,9 +101,23 @@ private:
     QCheckBox*       showCtxCheck_   = nullptr;
     QPlainTextEdit*  sysPromptEdit_  = nullptr;
     QPlainTextEdit*  userTplEdit_    = nullptr;
-    QListWidget*     toolsList_      = nullptr;  // 复选工具
-    QPushButton*     toolsAllBtn_    = nullptr;
-    QPushButton*     toolsNoneBtn_   = nullptr;
+    // S9：预设分组 + 标签
+    QComboBox*       groupBox_       = nullptr;  // general/exploration/cracking/tracing/scenarios
+    QLineEdit*       tagsEdit_       = nullptr;  // 逗号分隔
+    QLabel*          badgeLabel_     = nullptr;  // 顶部 badge
+    QPushButton*     lockBtn_        = nullptr;  // S9+：解锁/重新锁定
+
+    // 工具白名单 —— S9：QTreeWidget 三态 + 搜索 + chip
+    QTreeWidget* toolsTree_      = nullptr;
+    QLineEdit*   toolSearchEdit_ = nullptr;
+    // chip 过滤按钮（toggle 风格）
+    QToolButton* chipReadBtn_    = nullptr;
+    QToolButton* chipCtrlBtn_    = nullptr;
+    QToolButton* chipWriteBtn_   = nullptr;
+    QPushButton* toolsAllBtn_    = nullptr;
+    QPushButton* toolsNoneBtn_   = nullptr;
+    QPushButton* toolsReadOnlyBtn_ = nullptr;  // 只勾 Read 类
+    QLabel*      toolsCountLabel_  = nullptr;  // S9++：「已勾选 N/M」
 
     // 底部
     QPushButton* saveBtn_    = nullptr;

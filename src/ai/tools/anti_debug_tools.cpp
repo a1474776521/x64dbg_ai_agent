@@ -91,6 +91,11 @@ public:
         return "List all threads of the debuggee: id, TEB, CIP, suspend, priority, "
                "wait reason, LastError, thread name. 'current' is the active thread id.";
     }
+    std::string descriptionZh() const override
+    {
+        return "列出被调试进程的所有线程：id、TEB、CIP、挂起计数、优先级、"
+               "等待原因、LastError、线程名。返回中的 'current' 为当前活动线程 id。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {{"type","object"},{"properties", nlohmann::json::object()}};
@@ -166,6 +171,11 @@ public:
         return "Return the PEB virtual address of the debuggee. Pair with read_memory "
                "to inspect PEB fields. On WOW64 returns the 64-bit PEB.";
     }
+    std::string descriptionZh() const override
+    {
+        return "返回被调试进程的 PEB 虚拟地址。配合 read_memory 用于检查 PEB 字段。"
+               "WOW64 进程下返回 64 位 PEB 地址。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {{"type","object"},{"properties", nlohmann::json::object()}};
@@ -201,6 +211,12 @@ public:
         return "Read commonly-checked anti-debug fields from PEB: BeingDebugged (BYTE @+2), "
                "NtGlobalFlag (DWORD @+0x68/x86 or +0xBC/x64), ProcessHeap pointer. "
                "Use ProcessHeap + read_memory to inspect HeapFlags further (offsets vary by Win version).";
+    }
+    std::string descriptionZh() const override
+    {
+        return "读取 PEB 中常见的反调试相关字段：BeingDebugged（+2 字节）、"
+               "NtGlobalFlag（x86 @+0x68 / x64 @+0xBC 的 DWORD）、ProcessHeap 指针。"
+               "如需进一步检查 HeapFlags，用 ProcessHeap + read_memory（偏移因 Windows 版本而异）。";
     }
     nlohmann::json parametersSchema() const override
     {
@@ -269,9 +285,9 @@ public:
 
 void registerAntiDebugTools(ToolRegistry& reg)
 {
-    reg.registerTool(std::make_unique<ListThreadsTool>());
-    reg.registerTool(std::make_unique<GetPebAddressTool>());
-    reg.registerTool(std::make_unique<GetAntiDebugFlagsTool>());
+    reg.registerTool(std::make_unique<ListThreadsTool>(), "anti-debug-insight");
+    reg.registerTool(std::make_unique<GetPebAddressTool>(), "anti-debug-insight");
+    reg.registerTool(std::make_unique<GetAntiDebugFlagsTool>(), "anti-debug-insight");
 }
 
 }  // namespace x64ai

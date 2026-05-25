@@ -26,10 +26,21 @@ public:
     static ToolRegistry& instance();
 
     // 注册一个工具（按 name 唯一；重名后注册覆盖前注册）。
-    void registerTool(std::unique_ptr<ITool> tool);
+    // group 为空 → 落入默认 "agent-meta"。S9：用于 UI 功能域分组（与 ToolCategory 正交）。
+    void registerTool(std::unique_ptr<ITool> tool, std::string group = {});
 
     // 注册内置工具集（M4.4 实现完成后由它统一拉起所有 builtin tool）
     void registerBuiltinTools();
+
+    // S9：分组查询
+    // 工具 → 组名；未注册或未指定组返回 "agent-meta"
+    std::string groupOf(const std::string& toolName) const;
+    // 返回所有出现过的组名（含 builtin 全集），稳定有序（按注册顺序首次出现）
+    std::vector<std::string> listGroups() const;
+    // 列出某组下的全部工具名（按工具名字典序）
+    std::vector<std::string> listToolsByGroup(const std::string& group) const;
+    // 工具 → ToolCategory；未注册返回 ToolCategory::Read（保守默认）
+    ToolCategory categoryOf(const std::string& toolName) const;
 
     // 列出全部工具的元信息，转成 ChatTool 喂给 IChatProvider。
     std::vector<ChatTool> listChatTools() const;
@@ -52,6 +63,8 @@ private:
     ToolRegistry() = default;
 
     std::unordered_map<std::string, std::unique_ptr<ITool>> tools_;
-};
+    // S9：name → group 映射；注册顺序保留在 groupOrder_
+    std::unordered_map<std::string, std::string> toolGroup_;
+    std::vector<std::string>                     groupOrder_;};
 
 }  // namespace x64ai

@@ -27,7 +27,7 @@ namespace x64ai {
 // 每次修改 defaultPresets() 的语义（systemPrompt 措辞、enabledTools 列表等）
 // 都要 ++ 此版本；PresetStore 加载时若检测到磁盘版本更低，会用新版 defaults
 // 覆盖所有 readonly=true 的预设，但保留用户自定义（readonly=false）。
-constexpr int kPresetSchemaVersion = 12;
+constexpr int kPresetSchemaVersion = 13;
 
 struct AgentPreset {
     std::string id;
@@ -42,6 +42,14 @@ struct AgentPreset {
     std::string model;
     bool   showInContextMenu = true;
     bool   readonly          = false;
+
+    // S9：UI 分类
+    //   group: 单一分组键（general / exploration / cracking / tracing / scenarios）；
+    //          空字符串视为 "general"（fromJson 兼容老盘）
+    //   tags : 多标签，正交于 group，用于二级过滤
+    //          (read-only / write / hw-bp / cfg / patch / annotation / dataflow / anti-debug ...)
+    std::string              group;
+    std::vector<std::string> tags;
 
     nlohmann::json toJson() const;
     static AgentPreset fromJson(const nlohmann::json& j);

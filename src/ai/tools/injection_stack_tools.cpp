@@ -82,6 +82,12 @@ public:
                "Protection is fixed PAGE_EXECUTE_READWRITE (RWX) by SDK; use "
                "set_page_protect to change after. size<=64MB. Returns the base VA.";
     }
+    std::string descriptionZh() const override
+    {
+        return "在被调试进程中分配一段虚拟内存。addr=0 表示由系统选址。"
+               "由 SDK 限制保护属性固定为 PAGE_EXECUTE_READWRITE（RWX），可事后用 set_page_protect 修改。"
+               "size ≤ 64MB。返回分配区的基址 VA。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -144,6 +150,11 @@ public:
         return "Free a region previously returned by remote_alloc. addr MUST be "
                "the base, not a mid-region pointer. Returns ok=false on bad base.";
     }
+    std::string descriptionZh() const override
+    {
+        return "释放之前由 remote_alloc 分配的区域。addr 必须是基址，不能是区域中间的指针。"
+               "基址不正确时返回 ok=false。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -187,6 +198,11 @@ public:
         return "Push a duint value onto the debuggee stack (ESP/RSP -= pointer_size). "
                "Use for fake return addresses or argument injection. Returns the "
                "previous top-of-stack value.";
+    }
+    std::string descriptionZh() const override
+    {
+        return "向被调试进程栈上压入一个 duint 值（ESP/RSP -= 指针大小）。"
+               "可用于伪造返回地址或注入参数。返回原栈顶值。";
     }
     nlohmann::json parametersSchema() const override
     {
@@ -235,6 +251,12 @@ public:
                "offset is in POINTER-SIZED SLOTS not bytes (offset=1 means +4 on x86, +8 on x64). "
                "Default offset=0 (top of stack). Use to inspect return addr/args without altering SP.";
     }
+    std::string descriptionZh() const override
+    {
+        return "从栈上 [SP + offset * 指针大小] 处读取一个 duint。"
+               "offset 单位是指针槽，不是字节（offset=1 表示 x86 +4 / x64 +8）。"
+               "默认 offset=0（栈顶）。用于查看返回地址/参数而不动 SP。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -275,10 +297,10 @@ public:
 
 void registerInjectionStackTools(ToolRegistry& reg)
 {
-    reg.registerTool(std::make_unique<RemoteAllocTool>());
-    reg.registerTool(std::make_unique<RemoteFreeTool>());
-    reg.registerTool(std::make_unique<StackPushTool>());
-    reg.registerTool(std::make_unique<StackPeekTool>());
+    reg.registerTool(std::make_unique<RemoteAllocTool>(), "write-patch");
+    reg.registerTool(std::make_unique<RemoteFreeTool>(), "write-patch");
+    reg.registerTool(std::make_unique<StackPushTool>(), "write-patch");
+    reg.registerTool(std::make_unique<StackPeekTool>(), "register-stack");
 }
 
 }  // namespace x64ai

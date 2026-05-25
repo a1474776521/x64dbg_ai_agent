@@ -77,6 +77,11 @@ public:
         return "Persistently name an address in x64dbg (visible in disasm/dump). "
                "Pass text=\"\" to delete the label. Max 255 bytes UTF-8.";
     }
+    std::string descriptionZh() const override
+    {
+        return "在 x64dbg 中给指定地址打一个永久标签（在反汇编/数据视图中可见）。"
+               "传 text=\"\" 表示删除该标签。最多 255 字节（UTF-8）。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -122,6 +127,10 @@ public:
     {
         return "Get the label at an address (empty if none). Reads either manual or auto label.";
     }
+    std::string descriptionZh() const override
+    {
+        return "获取指定地址的标签（无则返回空）。手动标签和自动标签均可读取。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -154,6 +163,11 @@ public:
     {
         return "List all labels in all modules (module + rva + text + manual flag). "
                "Result is paged in memory; if too large, use get_label per address instead.";
+    }
+    std::string descriptionZh() const override
+    {
+        return "列出所有模块中的全部标签（模块名 + RVA + 文本 + 是否手动）。"
+               "结果整体加载到内存；若数量过大，建议按地址用 get_label 逐个查询。";
     }
     nlohmann::json parametersSchema() const override
     {
@@ -195,6 +209,11 @@ public:
     {
         return "Set the line comment at an address (visible in disasm view). "
                "Pass text=\"\" to delete the comment. Max 255 bytes UTF-8.";
+    }
+    std::string descriptionZh() const override
+    {
+        return "为指定地址设置行内注释（反汇编视图中可见）。"
+               "传 text=\"\" 表示删除注释。最多 255 字节（UTF-8）。";
     }
     nlohmann::json parametersSchema() const override
     {
@@ -241,6 +260,10 @@ public:
     {
         return "Get the comment at an address (empty if none).";
     }
+    std::string descriptionZh() const override
+    {
+        return "获取指定地址的注释（无则返回空）。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -273,6 +296,10 @@ public:
     {
         return "List all comments in all modules (module + rva + text + manual flag).";
     }
+    std::string descriptionZh() const override
+    {
+        return "列出所有模块中的全部注释（模块名 + RVA + 文本 + 是否手动）。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return { {"type","object"}, {"properties", nlohmann::json::object()} };
@@ -304,12 +331,12 @@ public:
 
 void registerAnnotationTools(ToolRegistry& reg)
 {
-    reg.registerTool(std::make_unique<SetLabelTool>());
-    reg.registerTool(std::make_unique<GetLabelTool>());
-    reg.registerTool(std::make_unique<ListLabelsTool>());
-    reg.registerTool(std::make_unique<SetCommentTool>());
-    reg.registerTool(std::make_unique<GetCommentTool>());
-    reg.registerTool(std::make_unique<ListCommentsTool>());
+    reg.registerTool(std::make_unique<SetLabelTool>(), "annotation");
+    reg.registerTool(std::make_unique<GetLabelTool>(), "annotation");
+    reg.registerTool(std::make_unique<ListLabelsTool>(), "annotation");
+    reg.registerTool(std::make_unique<SetCommentTool>(), "annotation");
+    reg.registerTool(std::make_unique<GetCommentTool>(), "annotation");
+    reg.registerTool(std::make_unique<ListCommentsTool>(), "annotation");
 }
 
 }  // namespace x64ai

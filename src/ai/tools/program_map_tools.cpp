@@ -125,6 +125,11 @@ public:
                "(RWX string) and info (module/section name) per page. Use to locate executable "
                "regions, RWX pages (unpacker artifact), heap/stack ranges.";
     }
+    std::string descriptionZh() const override
+    {
+        return "获取被调试进程完整的虚拟内存映射表。每页返回 base/size/state/protect（RWX 字符串）"
+               "和 info（模块/节名）。用于定位可执行区、RWX 页（脱壳痕迹）、堆栈区间。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return { {"type","object"}, {"properties", nlohmann::json::object()} };
@@ -177,6 +182,10 @@ public:
         return "Get the memory protection at an address. Returns RWX-style string and the "
                "containing page base/size.";
     }
+    std::string descriptionZh() const override
+    {
+        return "获取指定地址的内存保护属性。返回 RWX 风格字符串及其所属页的 base/size。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -221,6 +230,12 @@ public:
         return "Change memory protection for a region (calls VirtualProtectEx). "
                "protect is RWX-style ('RW', 'RWX', 'R-X', '---' etc.). "
                "size is in bytes; affects all pages covering [address, address+size).";
+    }
+    std::string descriptionZh() const override
+    {
+        return "修改一段内存的保护属性（底层调用 VirtualProtectEx）。"
+               "protect 为 RWX 风格字符串（如 'RW'、'RWX'、'R-X'、'---'）。"
+               "size 单位为字节；影响覆盖 [address, address+size) 的所有页。";
     }
     nlohmann::json parametersSchema() const override
     {
@@ -280,6 +295,11 @@ public:
     {
         return "List all functions discovered by x64dbg's analyzer (module + rva range + manual flag + "
                "instruction count). Use to get a 'program map'; cross-reference with list_labels for names.";
+    }
+    std::string descriptionZh() const override
+    {
+        return "列出 x64dbg 分析器识别出的全部函数（模块 + RVA 区间 + 是否手动标注 + 指令数）。"
+               "用于构建程序整体地图；可与 list_labels 交叉对照得到函数名。";
     }
     nlohmann::json parametersSchema() const override
     {
@@ -343,6 +363,11 @@ public:
         return "List IAT entries of a module (ordinal/name + IAT VA). Use to identify hooks, "
                "find which Win32 APIs the module relies on (crypto / net / file / anti-debug).";
     }
+    std::string descriptionZh() const override
+    {
+        return "列出模块的 IAT 条目（ordinal/name + IAT VA）。用于识别 hook、判断该模块依赖哪些 Win32 API"
+               "（加解密 / 网络 / 文件 / 反调试等）。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -400,6 +425,11 @@ public:
         return "List exported functions of a module (ordinal/name + VA + forward target). "
                "Use to find exposed API surface or forwarded symbols.";
     }
+    std::string descriptionZh() const override
+    {
+        return "列出模块导出的函数（ordinal/name + VA + 转发目标）。"
+               "用于查看对外暴露的 API 表面，或追踪 forward 到其它模块的符号。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -453,12 +483,12 @@ public:
 
 void registerProgramMapTools(ToolRegistry& reg)
 {
-    reg.registerTool(std::make_unique<GetMemoryMapTool>());
-    reg.registerTool(std::make_unique<GetPageProtectTool>());
-    reg.registerTool(std::make_unique<SetPageProtectTool>());
-    reg.registerTool(std::make_unique<ListFunctionsTool>());
-    reg.registerTool(std::make_unique<GetModuleImportsTool>());
-    reg.registerTool(std::make_unique<GetModuleExportsTool>());
+    reg.registerTool(std::make_unique<GetMemoryMapTool>(), "memory-search");
+    reg.registerTool(std::make_unique<GetPageProtectTool>(), "memory-search");
+    reg.registerTool(std::make_unique<SetPageProtectTool>(), "write-patch");
+    reg.registerTool(std::make_unique<ListFunctionsTool>(), "disasm-cfg");
+    reg.registerTool(std::make_unique<GetModuleImportsTool>(), "static-info");
+    reg.registerTool(std::make_unique<GetModuleExportsTool>(), "static-info");
 }
 
 }  // namespace x64ai

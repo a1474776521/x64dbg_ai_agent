@@ -267,6 +267,13 @@ public:
                "Caller MUST verify the target is writable code/data; on protected pages "
                "this will fail and report the address.";
     }
+    std::string descriptionZh() const override
+    {
+        return "向指定 VA 写入一段原始字节。"
+               "bytes_hex 接受 \"DE AD BE EF\" / \"deadbeef\" / \"DE,AD,BE,EF\" "
+               "（空格 / 逗号 / 冒号 / 短横线作分隔符；不支持通配符）。"
+               "调用方需自行确认目标可写；若是受保护页面将失败并返回出错地址。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -334,6 +341,13 @@ public:
                "RBP/EBP/CBP, RSI/RDI + sub-regs, DR0-DR3/DR6/DR7, CFLAGS, "
                "and arch-neutral aliases Cxx. "
                "XMM/YMM/MXCSR/FPU are NOT supported.";
+    }
+    std::string descriptionZh() const override
+    {
+        return "设置 CPU 寄存器的值。name 大小写不敏感；支持：通用寄存器（RAX/EAX/AX/AH/AL 等）、"
+               "R8-R15 及其 D/W/B 变体（仅 x64）、RIP/EIP/CIP、RSP/ESP/CSP、RBP/EBP/CBP、"
+               "RSI/RDI 及子寄存器、DR0-DR3/DR6/DR7、CFLAGS，以及架构无关别名 Cxx。"
+               "不支持 XMM / YMM / MXCSR / FPU。";
     }
     nlohmann::json parametersSchema() const override
     {
@@ -411,6 +425,14 @@ public:
                "ascii rejects bytes > 0x7F. utf16le emits 2-byte units little-endian. "
                "Both encodings auto-append the proper terminator (1 byte for utf8/ascii, "
                "2 bytes for utf16le).";
+    }
+    std::string descriptionZh() const override
+    {
+        return "向指定 VA 写入一个字符串（自动追加 NUL 结尾）。"
+               "encoding：\"utf8\"（默认）/ \"utf16le\" / \"ascii\"。"
+               "value 按普通 JSON 字符串传入（本就是 Unicode）。"
+               "ascii 拒绝字节 > 0x7F；utf16le 按小端 2 字节单元写出。"
+               "终结符自动追加（utf8/ascii 为 1 字节，utf16le 为 2 字节）。";
     }
     nlohmann::json parametersSchema() const override
     {
@@ -518,9 +540,9 @@ public:
 
 void registerDataWriteTools(ToolRegistry& reg)
 {
-    reg.registerTool(std::make_unique<PatchMemoryTool>());
-    reg.registerTool(std::make_unique<SetRegisterTool>());
-    reg.registerTool(std::make_unique<WriteStringTool>());
+    reg.registerTool(std::make_unique<PatchMemoryTool>(), "write-patch");
+    reg.registerTool(std::make_unique<SetRegisterTool>(), "write-patch");
+    reg.registerTool(std::make_unique<WriteStringTool>(), "write-patch");
 }
 
 }  // namespace x64ai

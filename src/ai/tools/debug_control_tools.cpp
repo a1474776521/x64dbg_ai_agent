@@ -78,6 +78,12 @@ public:
                "command and need to wait for it to stop again. "
                "Always set a sensible timeout_ms; do NOT use this to poll.";
     }
+    std::string descriptionZh() const override
+    {
+        return "阻塞等待调试器触发指定事件（breakpoint / paused / stepped），或超时后返回。"
+               "在你已用某个命令启动/恢复被调试进程后、需要等其再次停下来时调用。"
+               "务必设置合理的 timeout_ms；不要把它当成轮询用。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -188,7 +194,7 @@ public:
 
 void registerDebugControlTools(ToolRegistry& reg)
 {
-    reg.registerTool(std::make_unique<WaitForEventTool>());
+    reg.registerTool(std::make_unique<WaitForEventTool>(), "execution-control");
 }
 
 }  // namespace x64ai

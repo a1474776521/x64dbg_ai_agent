@@ -1,6 +1,7 @@
 // ai/tools/tool_registry.cpp
 #include "ai/tools/tool_registry.h"
 
+#include <algorithm>
 #include <chrono>
 
 #include "ai/tools/builtin_tools.h"
@@ -15,7 +16,7 @@ ToolRegistry& ToolRegistry::instance()
     return inst;
 }
 
-void ToolRegistry::registerTool(std::unique_ptr<ITool> tool)
+void ToolRegistry::registerTool(std::unique_ptr<ITool> tool, std::string group)
 {
     if (!tool) return;
     const std::string name = tool->name();
@@ -27,7 +28,40 @@ void ToolRegistry::registerTool(std::unique_ptr<ITool> tool)
         XAI_LOG_WARN("ToolRegistry: override existing tool '{}'", name);
     }
     tools_[name] = std::move(tool);
-    XAI_LOG_INFO("ToolRegistry: registered '{}'", name);
+    if (group.empty()) group = "agent-meta";
+    if (std::find(groupOrder_.begin(), groupOrder_.end(), group) == groupOrder_.end()) {
+        groupOrder_.push_back(group);
+    }
+    toolGroup_[name] = std::move(group);
+    XAI_LOG_INFO("ToolRegistry: registered '{}' (group={})", name, toolGroup_[name]);
+}
+
+std::string ToolRegistry::groupOf(const std::string& toolName) const
+{
+    auto it = toolGroup_.find(toolName);
+    return it == toolGroup_.end() ? std::string("agent-meta") : it->second;
+}
+
+std::vector<std::string> ToolRegistry::listGroups() const
+{
+    return groupOrder_;
+}
+
+std::vector<std::string> ToolRegistry::listToolsByGroup(const std::string& group) const
+{
+    std::vector<std::string> out;
+    for (const auto& [name, g] : toolGroup_) {
+        if (g == group) out.push_back(name);
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+ToolCategory ToolRegistry::categoryOf(const std::string& toolName) const
+{
+    auto it = tools_.find(toolName);
+    if (it == tools_.end() || !it->second) return ToolCategory::Read;
+    return it->second->category();
 }
 
 void ToolRegistry::registerBuiltinTools()
@@ -72,6 +106,7 @@ std::vector<ChatTool> ToolRegistry::listChatTools() const
         ChatTool t;
         t.name = name;
         t.description = tool->description();
+        t.descriptionZh = tool->descriptionZh();
         try {
             t.parametersJson = tool->parametersSchema().dump();
         } catch (const std::exception& e) {

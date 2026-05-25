@@ -153,6 +153,13 @@ public:
                "(None/BitExec/ByteWithExec.../WordWithExec...). hit_count=0 means "
                "either not executed or trace record not enabled for this page.";
     }
+    std::string descriptionZh() const override
+    {
+        return "查询指定 VA 的 trace record：hit_count、byte_type"
+               "（InstructionBody/Heading/Overlapped 等）、所在页 record_type"
+               "（None/BitExec/ByteWithExec.../WordWithExec...）。"
+               "hit_count=0 表示从未执行过，或者该页未启用 trace record。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -211,6 +218,12 @@ public:
                "(e.g. 0xC0000005 -> EXCEPTION_ACCESS_VIOLATION, 5 -> ERROR_ACCESS_DENIED). "
                "Returns ok=false if no match.";
     }
+    std::string descriptionZh() const override
+    {
+        return "把 Win32 / NT 错误码或异常码翻译成符号名"
+               "（如 0xC0000005 → EXCEPTION_ACCESS_VIOLATION，5 → ERROR_ACCESS_DENIED）。"
+               "查不到则返回 ok=false。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -266,6 +279,11 @@ public:
                "START address of the LAST instruction (inclusive), not end+1. "
                "manual=true (default) protects against re-analysis overwrite.";
     }
+    std::string descriptionZh() const override
+    {
+        return "注册一段分析器漏掉的函数范围。'end' 是最后一条指令的起始地址（含），不是 end+1。"
+               "manual=true（默认）可防止后续重新分析时被覆盖。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -315,9 +333,9 @@ public:
 
 void registerTraceErrorFuncTools(ToolRegistry& reg)
 {
-    reg.registerTool(std::make_unique<GetTraceRecordInfoTool>());
-    reg.registerTool(std::make_unique<TranslateErrorCodeTool>());
-    reg.registerTool(std::make_unique<AddFunctionTool>());
+    reg.registerTool(std::make_unique<GetTraceRecordInfoTool>(), "agent-meta");
+    reg.registerTool(std::make_unique<TranslateErrorCodeTool>(), "agent-meta");
+    reg.registerTool(std::make_unique<AddFunctionTool>(), "annotation");
 }
 
 }  // namespace x64ai

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <regex>
+#include <unordered_map>
 
 namespace x64ai {
 
@@ -33,6 +34,8 @@ nlohmann::json AgentPreset::toJson() const
     j["model"]             = model;
     j["showInContextMenu"] = showInContextMenu;
     j["readonly"]          = readonly;
+    j["group"]             = group;
+    j["tags"]              = tags;
     return j;
 }
 
@@ -55,6 +58,13 @@ AgentPreset AgentPreset::fromJson(const nlohmann::json& j)
     p.model             = jget<std::string>(j, "model", "");
     p.showInContextMenu = jget<bool>(j, "showInContextMenu", true);
     p.readonly          = jget<bool>(j, "readonly", false);
+    // S9：group / tags 兼容老盘（缺失 → group 空、tags 空，由 PresetStore 迁移期推断）
+    p.group             = jget<std::string>(j, "group", "");
+    if (j.contains("tags") && j["tags"].is_array()) {
+        for (const auto& v : j["tags"]) {
+            if (v.is_string()) p.tags.push_back(v.get<std::string>());
+        }
+    }
     return p;
 }
 
@@ -691,6 +701,35 @@ std::vector<AgentPreset> defaultPresets()
     }
 
     for (auto& p : v) p.readonly = true;
+
+    // S9：按 id 给出厂预设填 group + tags（集中维护，避免每个预设处零散插入）
+    struct Meta { const char* group; std::vector<std::string> tags; };
+    static const std::unordered_map<std::string, Meta> kMeta = {
+        {"freeform",            {"general",     {"read-only", "dataflow"}}},
+        {"analyze-function",    {"general",     {"annotation"}}},
+        {"explain-here",        {"general",     {"read-only"}}},
+        {"map-program",         {"exploration", {"read-only", "annotation"}}},
+        {"cfg-explorer",        {"exploration", {"read-only", "cfg"}}},
+        {"who-calls-here",      {"exploration", {"read-only", "dataflow"}}},
+        {"string-api-context",  {"exploration", {"read-only", "dataflow"}}},
+        {"annotate-function",   {"exploration", {"annotation"}}},
+        {"crack-license",       {"cracking",    {"write", "patch"}}},
+        {"patch-and-verify",    {"cracking",    {"write", "patch"}}},
+        {"trace-input",         {"tracing",     {"hw-bp", "dataflow"}}},
+        {"anti-anti-debug",     {"scenarios",   {"write", "anti-debug"}}},
+        {"malware-triage",      {"scenarios",   {"read-only", "anti-debug"}}},
+        {"unpack-helper",       {"scenarios",   {"write", "hw-bp", "anti-debug"}}},
+    };
+    for (auto& p : v) {
+        auto it = kMeta.find(p.id);
+        if (it != kMeta.end()) {
+            p.group = it->second.group;
+            p.tags  = it->second.tags;
+        } else {
+            p.group = "general";   // 未知 id 兜底
+        }
+    }
+
     return v;
 }
 

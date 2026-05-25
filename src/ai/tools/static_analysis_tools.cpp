@@ -91,6 +91,12 @@ public:
                "Each result includes the referencing VA, the reference type (call/jmp/data), "
                "and the module + nearby instruction for context.";
     }
+    std::string descriptionZh() const override
+    {
+        return "查找所有引用指定 VA 的地址（call / jmp / 数据引用）。"
+               "这是反向调用者查询：给定一个函数 VA，返回所有调用它的地点。"
+               "每条结果包含引用方 VA、引用类型（call/jmp/data）、所在模块及附近指令上下文。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -191,6 +197,11 @@ public:
                "Useful before calling get_disasm on the full function body. "
                "Returns failure if x64dbg has not yet analyzed the function.";
     }
+    std::string descriptionZh() const override
+    {
+        return "获取包含指定 VA 的函数的起止地址。在对整个函数体调用 get_disasm 前很有用。"
+               "若 x64dbg 还未分析过该函数则返回失败。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -246,6 +257,14 @@ public:
                "'??' for full-byte wildcard. Example: \"48 8B ?? 24 ?? E8\". "
                "Searches a single module range (specify 'module') or a custom range (specify 'start' + 'size'). "
                "Returns up to 'max_results' hit addresses.";
+    }
+    std::string descriptionZh() const override
+    {
+        return "在被调试进程内存中搜索字节模式。"
+               "模式采用 x64dbg 语法：十六进制字节空格分隔，'?' 表示半字节通配，'??' 表示整字节通配。"
+               "例如：\"48 8B ?? 24 ?? E8\"。"
+               "可在单个模块内搜索（指定 'module'），或在自定义区间搜索（指定 'start' + 'size'）。"
+               "最多返回 'max_results' 条命中地址。";
     }
     nlohmann::json parametersSchema() const override
     {
@@ -364,9 +383,9 @@ public:
 
 void registerStaticAnalysisTools(ToolRegistry& reg)
 {
-    reg.registerTool(std::make_unique<FindXrefsToTool>());
-    reg.registerTool(std::make_unique<GetFunctionRangeTool>());
-    reg.registerTool(std::make_unique<SearchPatternTool>());
+    reg.registerTool(std::make_unique<FindXrefsToTool>(), "disasm-cfg");
+    reg.registerTool(std::make_unique<GetFunctionRangeTool>(), "disasm-cfg");
+    reg.registerTool(std::make_unique<SearchPatternTool>(), "memory-search");
 }
 
 }  // namespace x64ai

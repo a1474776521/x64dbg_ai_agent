@@ -79,6 +79,12 @@ public:
                "If the new instruction is shorter than original, NOPs fill the gap "
                "by default (fill_nop=true). Returns assembled size on success.";
     }
+    std::string descriptionZh() const override
+    {
+        return "在指定 VA 汇编一条指令并写入字节。"
+               "若新指令比原指令短，默认（fill_nop=true）用 NOP 填充间隙。"
+               "成功时返回汇编后的字节数。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -144,6 +150,12 @@ public:
         return "Search [start, start+size) for bytes matching search_pattern and replace with "
                "replace_pattern. Both use space-separated hex with '??' as wildcard, "
                "e.g. '74 ?? 8B' -> '90 ?? 8B'. Size capped at 16 MB.";
+    }
+    std::string descriptionZh() const override
+    {
+        return "在区间 [start, start+size) 搜索匹配 search_pattern 的字节并替换为 replace_pattern。"
+               "两者均为空格分隔的十六进制串，'??' 为通配符，例如 '74 ?? 8B' -> '90 ?? 8B'。"
+               "size 上限 16 MB。";
     }
     nlohmann::json parametersSchema() const override
     {
@@ -214,6 +226,11 @@ public:
         return "Set an EFLAGS bit on the currently focused thread. "
                "name ∈ {ZF,OF,CF,PF,SF,TF,AF,DF,IF}. Useful to force a branch.";
     }
+    std::string descriptionZh() const override
+    {
+        return "在当前活动线程上设置一个 EFLAGS 标志位。"
+               "name ∈ {ZF,OF,CF,PF,SF,TF,AF,DF,IF}。常用于强行影响分支跳转。";
+    }
     nlohmann::json parametersSchema() const override
     {
         return {
@@ -261,9 +278,9 @@ public:
 
 void registerAssemblerPatternTools(ToolRegistry& reg)
 {
-    reg.registerTool(std::make_unique<AssembleAtTool>());
-    reg.registerTool(std::make_unique<PatternReplaceTool>());
-    reg.registerTool(std::make_unique<SetFlagTool>());
+    reg.registerTool(std::make_unique<AssembleAtTool>(), "write-patch");
+    reg.registerTool(std::make_unique<PatternReplaceTool>(), "write-patch");
+    reg.registerTool(std::make_unique<SetFlagTool>(), "write-patch");
 }
 
 }  // namespace x64ai

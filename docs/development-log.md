@@ -1012,3 +1012,72 @@ x64dbg SDK 的 `_plugin_registercallback` 对同 `(plugin, type)` 后注册者�
 ### 双架构 Release 编译验证
 - x64 / x86 均零警告通过
 - 工具配对校验：`description() override` 66 处 = `descriptionZh() override` 66 处（含部分文件内辅助类）
+
+---
+
+
+## S9 后续：场景预设 verdict gate + 新增 sample-triage 预检（2026-05-25）
+
+### 范围与最终数字
+
+- 新增预设 **1 个**：`sample-triage`（exploration 组，read-only + triage）
+- 改造预设 **3 个**：`unpack-helper` / `malware-triage` / `anti-anti-debug` 头部加 PHASE 0 verdict gate
+- 预设总数 **14 → 15**；`kPresetSchemaVersion` **13 → 14**
+- 双架构 Release 编译零警告通过；未打新 tag（挂在 S9 范畴下作为后续优化）
+
+### 问题：场景预设 prompt 前提硬编码导致前提不成立时大量空转
+
+`unpack-helper.systemPrompt` 第一句硬写 "The debuggee is a PACKED executable"，当用户对未加壳样本误选此预设时，agent 会按 7 步 workflow 绕完才反推出"未加壳"结论，浪费 token + iter。`malware-triage` / `anti-anti-debug` 同病。
+
+### 方案 C 落地（用户选定）
+
+#### 1) 新增 sample-triage 预设（形态预判 + 推荐下一步）
+
+- **定位**：只读、轻量、严格预算，只回答 4 个问题：
+  - `packed`：加壳判定（节名 UPX*/.aspack/.vmp0/.themida/.petite/.nsp0/.MEW/.MPRESS1 + RWX + 导入稀疏）
+  - `anti_debug`：反调试 API 表面
+  - `entry_anomaly`：EP 是否在非 .text section
+  - `iat_health`：normal/sparse/wiped（按导入条目数）
+- **严格预算**：systemPrompt 硬写 `MAX 5 tool calls total`；`maxIter=8`（留迭代余量给 reasoning，工具调用预算自约束）
+- **工具集**（10 个，全只读）：list_modules / get_module_info / get_module_imports / get_module_exports / get_memory_map / get_page_protect / get_registers / list_threads / eval_expression / list_labels
+- **输出固定 Markdown**：4 维度 checklist + 一行 `recommend: <preset-id>`
+- **推荐映射表**写进 prompt：
+  - packed=yes → `unpack-helper`
+  - packed=no + anti_debug=yes → `anti-anti-debug`
+  - packed=no + injection/C2/crypto API 命中 → `malware-triage`
+  - 纯净 → `analyze-function`（或想要总览选 `map-program`）
+  - 不确定 → `freeform`
+
+#### 2) 三个场景预设加 PHASE 0 verdict gate
+
+每个场景预设头部嵌入 2-3 工具调用的"自检"段，命中场景特征才进入 PHASE 1，否则建议改用 sample-triage / 对应正确预设并 STOP：
+
+- **unpack-helper PHASE 0**（max 3 calls）：get_module_imports（看导入数）+ get_memory_map（看节名/RWX）。无 packer signature → 建议 sample-triage / analyze-function 并 STOP
+- **malware-triage PHASE 0**（max 2 calls）：get_module_imports（看可疑 API）+ get_memory_map（看是否仍加壳）。加壳 → 建议 unpack-helper；表面干净 → 建议 sample-triage
+- **anti-anti-debug PHASE 0**（max 2 calls）：get_module_imports（看 anti-debug API）+ get_anti_debug_flags（看 PEB 状态）。空表面 + 加壳 → 建议 unpack-helper；空表面 + 干净 → 建议 sample-triage
+- 用户可显式说 "skip triage" / "I already confirmed it is X" 跳过 gate（写进 PHASE 0 文本作为 escape hatch）
+- **unpack-helper enabledTools** 补 `get_module_imports / get_module_exports / get_module_info`（PHASE 0 必备）；其它两个预设原本已含
+
+### 设计取舍
+
+- **不做 sub-agent 框架**：理论上可让 sample-triage 作为 unpack-helper 的子 agent 自动跑 PHASE 0，但当前 AgentLoop 无 sub-agent 机制（新增框架违反"最小改动"），且 inline PHASE 0 共享 prompt cache + 单轮对话体验更好
+- **PHASE 0 与 sample-triage 共存**：场景预设的 PHASE 0 是 sample-triage 的"嵌入精简版"，专攻自己的前提；sample-triage 作为独立可选预设让用户主动选完整 4 维度预检
+- **保留 malware-triage 不动**：malware-triage（行为分诊）与 sample-triage（形态预判）目标不同，不合并
+- **新预设组 = exploration**：而非新开 "triage" 组，原因是只多一个预设单开一组冗余；triage 作为 tag 区分即可
+- **VERDICT FORMAT 写死在 prompt**：用 `\n` 转义嵌入字符串字面量，确保 LLM 输出可被未来的 UI 解析器（若有）规范处理
+
+### 关键文件变更
+
+- `src/ai/agent_preset.cpp`：
+  - 第 426-450 行（anti-anti-debug）：systemPrompt 头部插 PHASE 0
+  - 第 585-609 行（malware-triage）：systemPrompt 头部插 PHASE 0
+  - 第 644-693 行（unpack-helper）：systemPrompt 头部插 PHASE 0；enabledTools 加 get_module_imports/_exports/_info
+  - 第 718-755 行：新增 sample-triage 预设定义
+  - kMeta 新增 `{"sample-triage", {"exploration", {"read-only", "triage"}}}`
+- `src/ai/agent_preset.h:30`：`kPresetSchemaVersion = 14`
+- 文档：features.md（schema 13→14、预设 14→15、出厂预设表重排）；skills-roadmap.md（新增 §5.6）；development-log.md（本节）
+
+### 验证
+
+- 双架构 Release 编译：x64 + x86 各 0 警告 0 错误，dp64 / dp32 已就位
+- Runtime 实测：留待真实样本回归（未加壳样本走 unpack-helper PHASE 0 应在 ≤3 calls 内返回"建议改用 sample-triage"）

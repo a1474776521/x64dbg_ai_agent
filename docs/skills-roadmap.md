@@ -309,3 +309,24 @@ S6 期间用户提出"全量中文化"诉求。结论 **暂不做，先收尾 S6
 - G-7 metrics 计数：低优先级延后
 - G-8 动态工具子集：复杂，不做
 - 预设 `userTemplate` 中文化（G-9 B 档）：本阶段未涉及，待回归后单独评估
+
+### 5.6 S9 后续优化：预设 verdict gate + sample-triage 预检（方案 C，2026-05-25）
+
+**问题**：unpack-helper / malware-triage / anti-anti-debug 三个场景预设的 systemPrompt 硬编码了"该样本是 X"的前提（如 "The debuggee is a PACKED executable"），导致前提不成立的样本（如未加壳样本误用了 unpack-helper）被迫绕完 7 步 workflow 才反推出结论，token 与 iter 双浪费。
+
+**方案 C（已实施）**：
+
+1. **新增 `sample-triage` 预设**（exploration 组，`read-only` + `triage` tag）
+   - 只读，9 工具：`list_modules / get_module_info / get_module_imports / get_module_exports / get_memory_map / get_page_protect / get_registers / list_threads / eval_expression / list_labels`
+   - 严格预算：systemPrompt 写死 "MAX 5 tool calls total"；`maxIter=8`
+   - 输出固定 Markdown checklist：`packed / anti_debug / entry_anomaly / iat_health` 四维度 + 一行 `recommend: <preset-id>`
+   - 推荐映射表写进 prompt：packed=yes→unpack-helper、anti_debug=yes→anti-anti-debug、injection/C2/crypto→malware-triage、纯净→analyze-function、不确定→freeform
+2. **三个场景预设统一加 PHASE 0 verdict gate**
+   - unpack-helper：先 `get_module_imports` 看导入数 + `get_memory_map` 看节名/RWX，命中 packer signature 才进 PHASE 1；否则建议改 sample-triage / analyze-function 并 STOP
+   - malware-triage：先 `get_module_imports` 看可疑 API 表面 + `get_memory_map` 看是否仍加壳；命中才进 PHASE 1；加壳建议先 unpack-helper、表面干净建议改 sample-triage
+   - anti-anti-debug：先 `get_module_imports` 看 anti-debug API + `get_anti_debug_flags` 看 PEB 状态；空表面建议改 sample-triage（或先 unpack-helper）
+   - 用户可显式说 "skip triage" 跳过 gate
+3. **schema 13 → 14**，预设数 14 → 15
+4. **未做 sub-agent 改造**：理由是当前 AgentLoop 无 sub-agent 框架，inline PHASE 0 共享 prompt cache + 单轮对话体验更好
+
+**验证**：双架构 Release 编译零警告通过。Runtime 实测留待回归。

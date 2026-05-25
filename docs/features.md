@@ -238,7 +238,7 @@
 | `%APPDATA%\x64dbg-ai-plugin\logs\plugin.log` | spdlog 文件输出 | `XAI_LOG_*` 宏 |
 | `%APPDATA%\x64dbg-ai-plugin\logs\write_audit.log` | S3 写工具审计（JSON 一行一条；rotating 4 MB×10） | `util/logging.cpp::auditLog` |
 | `%APPDATA%\x64dbg-ai-plugin\projects\<sha>.db` | 会话 + RAG 数据库 | `SessionStore` |
-| `%APPDATA%\x64dbg-ai-plugin\agent_presets.json` | Agent 预设（schemaVersion=13，含 `group` + `tags`；14 个 readonly 出厂预设，S8 新增 malware-triage / unpack-helper，anti-anti-debug 同步扩入 5 个被动诊断工具） | `PresetStore` |
+| `%APPDATA%\x64dbg-ai-plugin\agent_presets.json` | Agent 预设（schemaVersion=14，含 `group` + `tags`；15 个 readonly 出厂预设：S8 新增 malware-triage / unpack-helper，S9 后续新增 sample-triage 预检并为 3 个场景预设加入 PHASE 0 verdict gate） | `PresetStore` |
 | `%APPDATA%\x64dbg-ai-plugin\scripts\` | S5 agent 脚本目录；`list_scripts` / `load_script` / `run_script_file` 相对路径基准 | `util/paths.cpp::pluginScriptsDir` |
 | `%APPDATA%\x64dbg-ai-plugin\secrets\*.bin` | DPAPI 加密的 token/key | `SecretStore` |
 
@@ -407,15 +407,15 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 
 > UI 术语：主界面按钮 = 「工作流」；菜单「管理工作流…」；底层数据结构仍叫 `AgentPreset`。
 
-### 出厂预设（14 个，全 readonly）
+### 出厂预设（15 个，全 readonly）
 
 | 类别 | 预设 ID |
 |---|---|
 | general | `freeform` / `analyze-function` / `explain-here` |
-| exploration | `map-program` / `cfg-explorer` / `who-calls-here` / `string-api-context` |
-| cracking | `crack-license` / `patch-and-verify` / `anti-anti-debug` |
-| tracing | `trace-summary` / `trace-input` / `annotate-function` |
-| triage | `malware-triage` / `unpack-helper` |
+| exploration | `map-program` / `cfg-explorer` / `who-calls-here` / `string-api-context` / `annotate-function` / `sample-triage` |
+| cracking | `crack-license` / `patch-and-verify` |
+| tracing | `trace-input` |
+| scenarios | `anti-anti-debug` / `malware-triage` / `unpack-helper` |
 
 核心预设职责：
 
@@ -425,9 +425,8 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 | `analyze-function` | 围绕 RIP/EIP 所在函数整体行为分析；含 v4 强约束；S8 后含全 63 个工具 |
 | `who-calls-here` | 重点排查调用方：xref + 调用栈 + trace + 调用点反汇编 |
 | `string-api-context` | 字符串引用与 API 调用聚类（crypto/net/file/anti-debug） |
-| `trace-summary` | trace_query 起步 + locate_api_callers/get_disasm 佐证 |
-| `malware-triage` / `unpack-helper` | S8 新增独立预设 |
-| `anti-anti-debug` | S8 同步扩入 5 个被动诊断工具 |
+| `sample-triage` | **S9 后续新增**。只读、≤5 工具调用：判定加壳/反调试/入口异常/IAT 健康度，输出结构化 checklist + 推荐下一步预设。avoiding 让用户用错预设绕大圈 |
+| `malware-triage` / `unpack-helper` / `anti-anti-debug` | S8 三件套，S9 后续统一加 PHASE 0 verdict gate（首 2-3 工具调用判定预设前提是否成立，不成立则建议改用 sample-triage 或对应正确预设并 STOP） |
 
 所有出厂预设 `readonly=true`，systemPrompt 末尾强制 `OUTPUT LANGUAGE RULE`（必须 zh-CN，保留代码/地址/寄存器/指令原文）。
 
@@ -454,7 +453,7 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 - **enabledTools 空集 = 全部**：UI 全勾时自动归一为空集，AgentRunRequest 透传时空 tools → ToolRegistry 全量
 - **工具描述双语显示**：UI 显示优先中文（`descriptionZh()`），LLM 仍读英文（`description()`），不破坏 prompt cache
 - **dark 主题**：对话框打开前主动 `setStyleSheet(":/x64dbg-ai/styles/theme_dark.qss")`；QSS 段覆盖 QDialog 子树常见控件
-- **恢复出厂**温和语义：保留所有 `readonly=false` 用户预设，仅覆盖 readonly 那 14 项
+- **恢复出厂**温和语义：保留所有 `readonly=false` 用户预设，仅覆盖 readonly 那 15 项
 - 关闭时 `emit changed()` → AssistantPanel 自动 `PresetStore::load() + 重建 Agent 下拉 + rebuildDisasmAiSubmenu() + activePreset 兜底`
 
 ### 工具列表对话框（S9 G-10 新增）
@@ -476,7 +475,7 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 
 ```json
 {
-  "schemaVersion": 13,
+  "schemaVersion": 14,
   "presets": [{ "id": "...", "name": "...", "systemPrompt": "...", "userTemplate": "...",
                 "enabledTools": ["..."], "maxIter": 20, "temperature": 0.2,
                 "provider": "deepseek", "model": "", "showInContextMenu": true, "readonly": true,

@@ -285,7 +285,9 @@
 
 LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什么、再算什么、何时回答"。
 
-### 工具清单（S8 后 63 个：39 个只读 + 5 个控制 + 19 个写）
+### 工具清单（K-32 后 74 个：39 个只读 + 6 个控制 + 29 个写）
+
+> 历史增量：S8=63 → K-28 新增 `patch_file` 即 64 → K-29 新增 `search_pattern` 即 65 → K-31 加入会话生命周期五件套 70 → K-31 工具页计数实际为 74（含 `start_debug` / `attach_debug` / `detach_debug` / `restart_debug` / `stop_debug` + `patch_file` + `search_pattern` + 既有 67）。所有写工具仍走 5s confirm + audit；K-30 后断点写工具新增「系统 API 高频符号黑名单」二级安全护栏。
 
 | 类别 | 工具 | 说明 |
 |---|---|---|
@@ -353,6 +355,14 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 | **S8-E trace / 错误码 / 函数注册** | `get_trace_record_info(address)` (Read) | 合并 `GetTraceRecordHitCount` + `GetTraceRecordByteType` + 页对齐后的 `GetTraceRecordType`；hit_count=0 + record_type=None 时附 hint |
 |  | `translate_error_code(code)` (Read) | 0xC0000005 → EXCEPTION_ACCESS_VIOLATION；`std::call_once` lazy 灌入 `unordered_map<duint,string>`（`EnumErrorCodes` + `EnumExceptions`），后续 O(1)；32-bit 错误码尝试低 32 位回退匹配 |
 |  | `add_function(start, end, manual=true)` (Write+confirm) | `Script::Function::Add`；**end 是最后一条指令 VA inclusive，不是 end+1**；manual=true 防分析器覆盖 |
+| **K-28 补丁文件**（Write+confirm） | `patch_file(source_file?, target_file?)` | 走 `DbgFunctions()->PatchFile`（x64dbg 内置 Scylla-like 补丁器），把 `MemPatch` 累积的字节 diff 持久化到磁盘；source 默认当前调试目标，target 默认 `<source>_patched.<ext>`；同模块 image 偏移自动对齐；要求至少一次 `patch_memory` 后才会有 patch 可导出 |
+| **K-29 模式搜索**（Read） | `search_pattern(pattern, start?, size?, module?)` | `Script::Pattern::FindMem` 改写：先用 `ModSizeFromAddr` 替代 `DbgEval` 解算模块范围（K-29 修复 module 参数失败 bug）；`pattern` 支持 x64dbg 风格 `?` 通配；start/size 为绝对范围；module 与 start/size 二选一；命中上限 4096 |
+| **K-30 系统 API 断点防卡死** | （安全护栏，影响 `set_breakpoint` / `set_hw_breakpoint`） | 共享 `bp_safety.h`：`resolveBpAddr` → `classifyBpAddr` → 若 `isSystemModule(mod) && isHighFreqApi(sym)` 则 REFUSE，结果带替代建议 `set_conditional_bp(condition=...)` 与「调用方下断」两条出路；description 加 "may freeze OS" 警告。仅对 `set_hw_breakpoint(type=execute)` 拦截，write/access 类硬断不受影响 |
+| **K-31 会话生命周期**（全 Write + 5s confirm + audit） | `start_debug(file, args?, cwd?)` | `DbgCmdExec("init ...")`；不等启动完成，需 LLM 后接 `wait_for_event(["DebugStarted"])` 或读 `DbgIsDebugging` 自检 |
+|  | `attach_debug(pid)` | `DbgCmdExec("attach 0x...")`；pid 接受十进制 / 十六进制 / 0x 前缀 |
+|  | `detach_debug()` | `DbgCmdExec("detach")`；不杀目标进程 |
+|  | `restart_debug()` | `DbgCmdExec("InitDebug,...")` 重启当前会话；保留命令行 / cwd |
+|  | `stop_debug()` | `DbgCmdExec("StopDebug")`；会杀目标进程（与 detach 区别）
 
 ### ToolPolicy 三档（S3）
 
@@ -377,6 +387,26 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 - JSON 字段：`ts(ms epoch) / tool / category / args / phase / sha / session` + 终态 `ok / error / data_snippet / elapsed_ms`
 - phase ∈ `{begin, end, confirmed, denied_by_user, denied_no_ui}`
 - 便于 grep/jq 复盘 agent 行为：`type write_audit.log | jq 'select(.phase=="denied_by_user")'`
+
+#### 二级安全护栏（K-30 / K-32）
+
+ToolPolicy 是「**所有写都需 confirm + audit**」的横切护栏；K-30 在此之上对**断点类写工具**加了**内容级**白/黑名单二级拦截，避免 LLM 拼出"语法合法但语义致命"的调用（如对 `ntdll.NtWaitForSingleObject` 下 execute 硬断，每秒数百次命中导致整桌面冻结）。K-32 把这三套静态规则集抽成公共模块 `src/ai/tools/bp_safety.h` 并加上专用 UI。
+
+| 护栏 | 受影响工具 | 拒绝条件 | 出路 |
+|---|---|---|---|
+| **run_dbg_command 白名单** | `run_dbg_command` | 命令首 token（按空白/逗号切，小写）不在合并集 `dbgCmdWhitelist()` 内 | 用户可在 `%APPDATA%\x64dbg-ai-plugin\config.json` 加 `extra_dbg_cmd_whitelist: ["bpdll", ...]` **追加**（不能从默认集移除）；改后需重启插件，`std::call_once` 合并 |
+| **K-30 系统模块黑名单** | `set_breakpoint(type=software\|hardware)` / `set_hw_breakpoint(type=execute)` | 目标 VA 所在模块 ∈ `bpSysModules()`（ntdll/kernel32/kernelbase/user32/...共 24 项）**且** 符号名 ∈ `bpHotApis()`（LoadLibrary/HeapAlloc/...共 ~60 项） | description 提示改用 `set_conditional_bp(condition=...)` 由 x64dbg 内核过滤；或用 `list_xrefs_to` / `find_pattern` 找调用方在用户代码中下断 |
+| **K-32 公共模块** | （内部）`bp_safety.h` 暴露 `bpSysModules() / bpHotApis() / isSystemModule / isHighFreqApi / classifyBpAddr / dbgCmdWhitelistDefaults / dbgCmdWhitelist` | — | 新断点类工具直接 include；UI `SafetyBrowserDialog` 也消费同一份数据，零漂移 |
+
+#### 安全护栏 UI（K-32）
+
+- 入口：「已注册工具一览」对话框底部 **「安全护栏…」** 按钮；以及 `run_dbg_command` / `set_breakpoint` / `set_hw_breakpoint` 三个工具的**详情窗**额外的「查看此工具的安全护栏…」按钮（自动跳到相关 tab）
+- 实现：`src/ui/safety_browser_dialog.{h,cpp}`，4 个只读 tab：
+  1. **run_dbg_command 白名单**：合并展示「默认 (代码硬编码)」+「用户配置 (config.json)」双来源标签，QTableWidget 双击复制
+  2. **系统模块黑名单 (K-30)**：24 项，搜索 + 计数
+  3. **高频 API 黑名单 (K-30)**：~60 项，搜索 + 计数
+  4. **如何在 config.json 配置**：完整 JSON 示例 + 「打开 config.json」/「复制示例」/「复制路径」按钮；文件不存在时点开按钮会用骨架 `{"extra_dbg_cmd_whitelist": []}` 创建后用系统默认编辑器打开
+- 设计取舍：白名单**只能追加**（避免误关护栏）；黑名单**不开放配置**（K-30 是防卡死硬护栏）；UI 纯只读（修改需手编 config + 重启）
 
 ### Agent loop
 

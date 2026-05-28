@@ -20,6 +20,7 @@
 #include "ai/tools/tool_args_util.h"
 #include "ai/tools/tool_context.h"
 #include "ai/tools/tool_registry.h"
+#include "ai/tools/bp_safety.h"
 
 #include <algorithm>
 #include <atomic>
@@ -74,6 +75,32 @@ bool parseVa(const nlohmann::json& args, const char* key, std::uint64_t& out, st
     return false;
 }
 
+// set_breakpoint 专用：先尝试 parseVa（数字 / hex），失败再走 x64dbg 表达式求值，
+// 支持 "kernel32.LoadLibraryW" 这种 module.symbol 语法（见 known-issues K-30）。
+bool resolveBpAddr(const nlohmann::json& args, const char* key,
+                   std::uint64_t& out, std::string& err)
+{
+    if (parseVa(args, key, out, err)) { err.clear(); return true; }
+    if (!args.contains(key) || !args[key].is_string()) return false;
+    const std::string expr = args[key].get<std::string>();
+    if (expr.empty()) { err = "empty address expression"; return false; }
+    bool ok = false;
+    duint v = DbgEval(expr.c_str(), &ok);
+    if (!ok || v == 0) {
+        err = "failed to resolve address: '" + expr +
+              "' (not a number/hex and not a valid x64dbg expression; "
+              "try eval_expression first, or check module is loaded)";
+        return false;
+    }
+    out = static_cast<std::uint64_t>(v);
+    err.clear();
+    return true;
+}
+
+// 系统 DLL / 高频 API 黑名单 + classifyBpAddr：已抽到共享头 bp_safety.h
+// （历史此处和 advanced_bp_tools.cpp 各有一份重复定义；K-32 重构合并）。
+// 见 known-issues K-30 / K-32。
+
 // 等下次 Paused/Breakpoint/Stepped；timeoutMs 默认 30s，可被 cancelFlag 提前中断
 bool waitForStop(const std::atomic<bool>* cancel, int timeoutMs)
 {
@@ -91,20 +118,7 @@ bool waitForStop(const std::atomic<bool>* cancel, int timeoutMs)
     return false;
 }
 
-// run_dbg_command 白名单（首 token，大小写不敏感）。
-// 注意：x64dbg 命令大小写不敏感且有大量缩写，这里只列**完整 token**。
-const std::unordered_set<std::string>& dbgCmdWhitelist()
-{
-    static const std::unordered_set<std::string> wl = {
-        // 断点
-        "bp", "bpc", "bphwc", "bpd", "bpe",
-        // 执行控制
-        "run", "stepinto", "stepover", "stepout", "pause",
-        // 数据读取（虽然有专门 read_memory，但允许 LLM 用 dump 命令偶尔查）
-        "db", "dw", "dd", "dq",
-    };
-    return wl;
-}
+// run_dbg_command 白名单 dbgCmdWhitelist() 已抽到 bp_safety.h（K-32 重构）。
 
 std::string toLowerCopy(std::string s)
 {
@@ -124,17 +138,31 @@ public:
     bool requiresUserConfirmation() const override { return true; }
     std::string description() const override
     {
-        return "Install a breakpoint at the given VA. "
-               "type=software (default) installs a soft INT3 breakpoint; "
-               "type=hardware installs an HW execute breakpoint (DR0-DR3, limited to 4). "
-               "Use this when you need the debuggee to stop at a specific address.";
+        return "Install a breakpoint at the given address. "
+               "'addr' accepts a VA (\"0x401000\", 4198400) or an x64dbg expression "
+               "(\"kernel32.LoadLibraryW\", \"user32.MessageBoxW\"). "
+               "type=software (default) installs an INT3 breakpoint; "
+               "type=hardware installs an HW execute breakpoint (DR0-DR3, max 4). "
+               "WARNING: setting an unconditional software breakpoint on hot system APIs "
+               "(LoadLibrary, VirtualAlloc, CreateFile, EnterCriticalSection, PeekMessage, ...) "
+               "in ntdll/kernel32/user32 etc. will FREEZE the entire OS (mouse/keyboard lag), "
+               "because every other process triggers it and the debuggee's UI thread stalls. "
+               "For hot APIs, use 'set_conditional_bp' with a filter, or use 'hardware' type, "
+               "or break inside the caller in user code instead.";
     }
     std::string descriptionZh() const override
     {
-        return "在指定 VA 安装一个断点。"
-               "type=software（默认）安装软件 INT3 断点；"
+        return "在指定地址安装断点。"
+               "'addr' 支持 VA（\"0x401000\"、4198400）或 x64dbg 表达式"
+               "（\"kernel32.LoadLibraryW\"、\"user32.MessageBoxW\"）。"
+               "type=software（默认）安装 INT3 断点；"
                "type=hardware 安装硬件执行断点（DR0-DR3，总数最多 4 个）。"
-               "需要被调试进程停在某个具体地址时使用。";
+               "警告：在 ntdll/kernel32/user32 等系统 DLL 的高频 API "
+               "（LoadLibrary、VirtualAlloc、CreateFile、EnterCriticalSection、PeekMessage 等）"
+               "上下无条件软断点会冻结整个系统（鼠标键盘严重卡顿），"
+               "因为其他进程也会命中，且被调试进程 UI 线程会被反复暂停。"
+               "高频 API 应改用 set_conditional_bp（带过滤条件），或用 hardware 类型，"
+               "或者在调用方的用户代码里下断点。";
     }
     nlohmann::json parametersSchema() const override
     {
@@ -142,7 +170,9 @@ public:
             {"type", "object"},
             {"properties", {
                 {"addr", {{"type", "string"},
-                          {"description", "VA, e.g. \"0x401000\" or 4198400"}}},
+                          {"description",
+                           "VA (\"0x401000\", 4198400) or x64dbg expression "
+                           "(\"kernel32.LoadLibraryW\")"}}},
                 {"type", {{"type", "string"},
                           {"enum", nlohmann::json::array({"software", "hardware"})},
                           {"description", "Breakpoint type; default 'software'"}}},
@@ -157,9 +187,31 @@ public:
             r.ok = false; r.error = "debugger is not active"; return r;
         }
         std::uint64_t va = 0; std::string err;
-        if (!parseVa(args, "addr", va, err)) { r.ok = false; r.error = err; return r; }
+        if (!resolveBpAddr(args, "addr", va, err)) { r.ok = false; r.error = err; return r; }
         std::string bpType = "software";
         if (args.contains("type") && args["type"].is_string()) bpType = args["type"].get<std::string>();
+
+        // 高频系统 API 危险检查：软断点 + 系统模块 + 热 API → 拒绝并给出明确建议
+        if (bpType == "software") {
+            HotSpotInfo hs = classifyBpAddr(va);
+            if (hs.dangerous) {
+                r.ok = false;
+                r.error =
+                    "REFUSED: unconditional software breakpoint on hot system API '" +
+                    hs.moduleName + "!" + hs.symbolName + "' (" + formatHexU64(va) + ") "
+                    "would freeze the OS (mouse/keyboard lag, debuggee UI thread stalls). "
+                    "Use one of: "
+                    "(1) set_conditional_bp with a filter expression "
+                    "(e.g. break only when arg.get(0) matches a specific value); "
+                    "(2) set this breakpoint with type='hardware' (DR0-DR3, only 4 slots, "
+                    "still triggers per-thread but cheaper than INT3); "
+                    "(3) breakpoint inside the user-code caller of this API instead "
+                    "(use find_xrefs_to / locate_api_callers to find call sites in the debuggee).";
+                XAI_LOG_WARN("set_breakpoint REFUSED hot API: {}!{} at {}",
+                             hs.moduleName, hs.symbolName, formatHexU64(va).c_str());
+                return r;
+            }
+        }
 
         bool ok;
         if (bpType == "hardware") {
@@ -178,6 +230,13 @@ public:
         }
         r.ok = true;
         r.data = {{"addr", formatHexU64(va)}, {"type", bpType}, {"installed", true}};
+
+        // 顺手把 module!symbol 回写给 LLM，方便它后续操作（无危险也补充上下文）
+        HotSpotInfo hs = classifyBpAddr(va);
+        if (!hs.moduleName.empty()) {
+            r.data["module"] = hs.moduleName;
+            if (!hs.symbolName.empty()) r.data["symbol"] = hs.symbolName;
+        }
         return r;
     }
 };
@@ -477,6 +536,258 @@ public:
     }
 };
 
+// ============= 会话控制：start / attach / detach / restart / stop =============
+//
+// 这五个都是高危：直接管控 x64dbg 调试会话生命周期。
+//   - start/attach 会拉起 / 接管进程；
+//   - restart 会杀掉当前调试进程并重启；
+//   - detach 会让进程脱离调试器（继续裸跑）；
+//   - stop 会杀掉当前进程。
+// 都走 requiresUserConfirmation=true，依靠 ToolRegistry::dispatch 弹 5s 倒计时。
+//
+// 命令对应（见 x64dbg 文档 commands/debug-control/index.html）：
+//   InitDebug "target.exe"   启动新调试（也有别名 init / initdbg）
+//   attach    pid             附加到 pid
+//   detach                    脱离当前调试
+//   Restart                   重启当前调试（保留断点）
+//   StopDebug                 结束当前调试（也有别名 stop）
+
+class StartDebugTool : public ITool {
+public:
+    std::string name() const override { return "start_debug"; }
+    ToolCategory category() const override { return ToolCategory::Write; }
+    bool requiresUserConfirmation() const override { return true; }
+    std::string description() const override
+    {
+        return "Start a new debug session by launching 'target_path'. Optionally pass "
+               "'command_line' as additional CLI arguments to the target. Fails if a "
+               "session is already active - call stop_debug or restart_debug first. "
+               "DANGEROUS: launches a process. Requires user confirmation.";
+    }
+    std::string descriptionZh() const override
+    {
+        return "启动新调试会话：拉起 'target_path' 指定的程序。可选传 'command_line' "
+               "作为目标程序的附加命令行参数。如已存在调试会话会失败 —— 先调 stop_debug "
+               "或 restart_debug。危险操作：会启动一个新进程，需要用户确认。";
+    }
+    nlohmann::json parametersSchema() const override
+    {
+        return {
+            {"type","object"},
+            {"properties", {
+                {"target_path",  {{"type","string"},
+                                  {"description","Absolute path to the .exe/.dll to debug"}}},
+                {"command_line", {{"type","string"},
+                                  {"description","Optional CLI args passed to the target"}}},
+            }},
+            {"required", nlohmann::json::array({"target_path"})},
+        };
+    }
+    ToolResult invoke(const nlohmann::json& args, ToolContext& /*ctx*/) override
+    {
+        ToolResult r;
+        if (DbgIsDebugging()) {
+            r.ok=false;
+            r.error="a debug session is already active - call stop_debug or restart_debug first";
+            return r;
+        }
+        if (!args.contains("target_path") || !args["target_path"].is_string()) {
+            r.ok=false; r.error="'target_path' required (string)"; return r;
+        }
+        std::string target = args["target_path"].get<std::string>();
+        if (target.empty() || target.size() > 1024) {
+            r.ok=false; r.error="'target_path' length out of range [1, 1024]"; return r;
+        }
+        // x64dbg InitDebug 语法：路径不带引号会被空格切断；统一加引号
+        // 文档：InitDebug "C:\path\to\target.exe" [cmdline]
+        std::string cmd = "InitDebug \"" + target + "\"";
+        if (args.contains("command_line") && args["command_line"].is_string()) {
+            const auto cl = args["command_line"].get<std::string>();
+            if (!cl.empty()) cmd += ", " + cl;  // x64dbg InitDebug 第二参数也用逗号
+        }
+        XAI_LOG_INFO("start_debug: cmd='{}'", cmd.c_str());
+        if (!DbgCmdExecDirect(cmd.c_str())) {
+            r.ok=false; r.error="DbgCmdExecDirect failed for: " + cmd;
+            return r;
+        }
+        r.ok=true;
+        r.data = {
+            {"command", cmd},
+            {"target_path", target},
+            {"note", "session launch issued; debugger will reach system breakpoint asynchronously - "
+                     "use wait_for_event to observe initial pause"},
+        };
+        return r;
+    }
+};
+
+class AttachDebugTool : public ITool {
+public:
+    std::string name() const override { return "attach_debug"; }
+    ToolCategory category() const override { return ToolCategory::Write; }
+    bool requiresUserConfirmation() const override { return true; }
+    std::string description() const override
+    {
+        return "Attach the debugger to a running process by PID. Fails if a session "
+               "is already active. DANGEROUS: intercepts another process; requires "
+               "user confirmation.";
+    }
+    std::string descriptionZh() const override
+    {
+        return "通过 PID 附加到一个正在运行的进程。如已存在调试会话会失败。"
+               "危险操作：会接管另一个进程，需要用户确认。";
+    }
+    nlohmann::json parametersSchema() const override
+    {
+        return {
+            {"type","object"},
+            {"properties", {
+                {"pid", {{"type","integer"},{"minimum",1},
+                         {"description","Target process ID (decimal)"}}},
+            }},
+            {"required", nlohmann::json::array({"pid"})},
+        };
+    }
+    ToolResult invoke(const nlohmann::json& args, ToolContext& /*ctx*/) override
+    {
+        ToolResult r;
+        if (DbgIsDebugging()) {
+            r.ok=false;
+            r.error="a debug session is already active - call detach or stop_debug first";
+            return r;
+        }
+        if (!args.contains("pid") || !args["pid"].is_number_integer()) {
+            r.ok=false; r.error="'pid' required (positive integer)"; return r;
+        }
+        const long long pid = args["pid"].get<long long>();
+        if (pid <= 0 || pid > 0xFFFFFFFFLL) {
+            r.ok=false; r.error="'pid' out of range"; return r;
+        }
+        // x64dbg attach 命令接收十六进制 PID（按文档默认所有数值都按 hex 解析）
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "attach %llx", pid);
+        XAI_LOG_INFO("attach_debug: cmd='{}' pid={}", buf, pid);
+        if (!DbgCmdExecDirect(buf)) {
+            r.ok=false; r.error=std::string("DbgCmdExecDirect failed for: ") + buf;
+            return r;
+        }
+        r.ok=true;
+        r.data = {{"command", buf}, {"pid", pid}};
+        return r;
+    }
+};
+
+class DetachDebugTool : public ITool {
+public:
+    std::string name() const override { return "detach_debug"; }
+    ToolCategory category() const override { return ToolCategory::Write; }
+    bool requiresUserConfirmation() const override { return true; }
+    std::string description() const override
+    {
+        return "Detach the debugger from the current process; the process continues "
+               "running without debugging. Fails if no active session. Requires user confirmation.";
+    }
+    std::string descriptionZh() const override
+    {
+        return "脱离当前调试进程：进程会继续运行，不再被调试。无活动会话时失败。需要用户确认。";
+    }
+    nlohmann::json parametersSchema() const override
+    {
+        return {{"type","object"},{"properties", nlohmann::json::object()}};
+    }
+    ToolResult invoke(const nlohmann::json& /*args*/, ToolContext& /*ctx*/) override
+    {
+        ToolResult r;
+        if (!DbgIsDebugging()) { r.ok=false; r.error="no active debug session"; return r; }
+        XAI_LOG_INFO("detach_debug invoked");
+        if (!DbgCmdExecDirect("detach")) {
+            r.ok=false; r.error="DbgCmdExecDirect failed for: detach"; return r;
+        }
+        r.ok=true; r.data={{"command","detach"}};
+        return r;
+    }
+};
+
+class RestartDebugTool : public ITool {
+public:
+    std::string name() const override { return "restart_debug"; }
+    ToolCategory category() const override { return ToolCategory::Write; }
+    bool requiresUserConfirmation() const override { return true; }
+    std::string description() const override
+    {
+        return "Restart the current debug session: terminate the debuggee, then re-launch "
+               "it with the same target/cmdline. Breakpoints set in x64dbg are preserved. "
+               "Fails if no active session - use start_debug instead. DANGEROUS: kills the "
+               "currently debugged process; requires user confirmation.";
+    }
+    std::string descriptionZh() const override
+    {
+        return "重启当前调试会话：先终止被调试进程，再用原 target/命令行重新拉起。"
+               "x64dbg 里设置的断点会被保留。无活动会话时失败 —— 改用 start_debug。"
+               "危险操作：会杀掉当前被调试进程，需要用户确认。";
+    }
+    nlohmann::json parametersSchema() const override
+    {
+        return {{"type","object"},{"properties", nlohmann::json::object()}};
+    }
+    ToolResult invoke(const nlohmann::json& /*args*/, ToolContext& /*ctx*/) override
+    {
+        ToolResult r;
+        if (!DbgIsDebugging()) {
+            r.ok=false;
+            r.error="no active debug session - call start_debug to launch a new one";
+            return r;
+        }
+        XAI_LOG_INFO("restart_debug invoked");
+        if (!DbgCmdExecDirect("Restart")) {
+            r.ok=false; r.error="DbgCmdExecDirect failed for: Restart"; return r;
+        }
+        r.ok=true;
+        r.data = {
+            {"command","Restart"},
+            {"note","debuggee terminated and re-launched asynchronously; use wait_for_event "
+                    "to observe initial system breakpoint"},
+        };
+        return r;
+    }
+};
+
+class StopDebugTool : public ITool {
+public:
+    std::string name() const override { return "stop_debug"; }
+    ToolCategory category() const override { return ToolCategory::Write; }
+    bool requiresUserConfirmation() const override { return true; }
+    std::string description() const override
+    {
+        return "Stop the current debug session: terminate the debuggee. No-op if no "
+               "active session. DANGEROUS: kills the debugged process; requires user confirmation.";
+    }
+    std::string descriptionZh() const override
+    {
+        return "结束当前调试会话：终止被调试进程。无活动会话时返回 no-op。"
+               "危险操作：会杀掉被调试进程，需要用户确认。";
+    }
+    nlohmann::json parametersSchema() const override
+    {
+        return {{"type","object"},{"properties", nlohmann::json::object()}};
+    }
+    ToolResult invoke(const nlohmann::json& /*args*/, ToolContext& /*ctx*/) override
+    {
+        ToolResult r;
+        if (!DbgIsDebugging()) {
+            r.ok=true;
+            r.data = {{"command","StopDebug"},{"note","no active session, no-op"}};
+            return r;
+        }
+        XAI_LOG_INFO("stop_debug invoked");
+        if (!DbgCmdExecDirect("StopDebug")) {
+            r.ok=false; r.error="DbgCmdExecDirect failed for: StopDebug"; return r;
+        }
+        r.ok=true; r.data = {{"command","StopDebug"}};
+        return r;
+    }
+};
+
 void registerDebugWriteTools(ToolRegistry& reg)
 {
     reg.registerTool(std::make_unique<SetBreakpointTool>(), "breakpoint");
@@ -485,6 +796,11 @@ void registerDebugWriteTools(ToolRegistry& reg)
     reg.registerTool(std::make_unique<StepOverTool>(), "execution-control");
     reg.registerTool(std::make_unique<RunUntilTool>(), "execution-control");
     reg.registerTool(std::make_unique<RunDbgCommandTool>(), "write-patch");
+    reg.registerTool(std::make_unique<StartDebugTool>(), "session-control");
+    reg.registerTool(std::make_unique<AttachDebugTool>(), "session-control");
+    reg.registerTool(std::make_unique<DetachDebugTool>(), "session-control");
+    reg.registerTool(std::make_unique<RestartDebugTool>(), "session-control");
+    reg.registerTool(std::make_unique<StopDebugTool>(), "session-control");
 }
 
 }  // namespace x64ai

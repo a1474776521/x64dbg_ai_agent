@@ -98,6 +98,21 @@ void Config::loadLocked()
     readField(j, "stream_timeout_ms",    data_.streamTimeoutMs);
     readField(j, "stream_low_speed_sec", data_.streamLowSpeedSec);
 
+    // extra_dbg_cmd_whitelist：用户在 config.json 自定义追加到 run_dbg_command 白名单
+    if (j.contains("extra_dbg_cmd_whitelist") && j["extra_dbg_cmd_whitelist"].is_array()) {
+        data_.extraDbgCmdWhitelist.clear();
+        for (const auto& v : j["extra_dbg_cmd_whitelist"]) {
+            if (!v.is_string()) continue;
+            std::string s = v.get<std::string>();
+            // 转小写存储，省得每次比较再转
+            for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (s.empty() || s.size() > 32) continue;  // sanity
+            data_.extraDbgCmdWhitelist.push_back(std::move(s));
+        }
+        XAI_LOG_INFO("config: extra_dbg_cmd_whitelist loaded ({} entries)",
+                     data_.extraDbgCmdWhitelist.size());
+    }
+
     XAI_LOG_INFO("config loaded: provider={}, copilot.api_base={}, deepseek.api_base={}, default_model={}",
                  data_.provider, data_.copilot.apiBase, data_.deepseek.apiBase, data_.defaultModel);
 }

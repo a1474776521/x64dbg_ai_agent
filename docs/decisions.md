@@ -12,6 +12,136 @@
 
 ---
 
+## 2026-05-28 · K-32：白/黑名单抽公共模块 + 独立只读 UI（否决「主表加列」与「UI 可编辑」）
+
+**背景**：K-30 引入的 `kSysMods` / `kHotApis` / `classifyBpAddr` 在 `debug_write_tools.cpp` 和 `advanced_bp_tools.cpp` 各有一份完全相同的副本；未来加第三个断点类工具会出现第三份。同时用户问"我怎么知道 `run_dbg_command` 允许什么命令" / "怎么扩白名单"找不到地方，「已注册工具一览」也没暴露 ACL 信息。
+
+**候选方案**：
+- **A. 复制现状不抽公共模块**：每加一个断点工具就 copy-paste；UI 上在主表加 1 列「安全护栏」简短文字
+- **B. 抽 `bp_safety.h` 公共模块 + 主表加列**：去重；UI 在工具表加一列"Safety"，每行写 "whitelist" / "K-30 blacklist" / "—"
+- **C. 抽公共模块 + 独立只读对话框 + 工具详情交叉引用**（最终）：去重；新建 `SafetyBrowserDialog` 4 tab；主表只在底部加一个按钮，三个受影响工具详情窗加跳转链接
+- **D. 公共模块 + UI 可编辑（白名单 + 黑名单都能改）**：把配置面板做进 UI
+
+**选定**：C。
+- A 拒绝：副本必然漂移（K-30 已经在两份代码里都加了 `LdrLoadDll`，下次加 K-33 再加一个，必然漏一处）
+- B 拒绝：74 个工具里只有 3 个受护栏影响，加列对 71 个工具是 N/A 噪声；列宽窄了也写不下"K-30 blacklist (sys mod + hot api)"这种语义
+- D 拒绝：黑名单（K-30 sys/hot）是「防卡死」硬护栏，UI 可改 = LLM 也能通过 prompt 注入诱导用户改；白名单虽然可追加但要走文件编辑 + 重启，给一个心理 gate；UI 只读是有意保留的"摩擦"
+
+**代价 / 复盘**：
+- `dbgCmdWhitelist()` 合并集走 `static once_flag`，**修改 config 必须重启插件**，UI 已显式提示；如果用户没看提示改完不重启，会以为没生效——可接受
+- 黑名单未来若有合理覆盖场景（如自研壳的 user32 钩子）需新增 `extra_safe_apis` 字段（白名单覆盖黑名单），届时同走 config + 重启
+- "在详情窗加跳转链接"模式可复用：将来其他工具（如 RAG / preset）也有需要展示规则的场景，可同模式新建 `*BrowserDialog`
+
+---
+
+## 2026-05-28 · K-31：会话生命周期五件套独立工具（否决「合一个 manage_debug」与「让 LLM 走 run_dbg_command」）
+
+**背景**：LLM 不能启动 / 重启 / 附加 / 脱离 / 结束调试会话；调试中工具大都假设"已经在调试"，但没有进入这个状态的入口。
+
+**候选方案**：
+- **A. 让 LLM 用 `run_dbg_command("init <file>")` / `run_dbg_command("attach 0x...")` 通过命令逃生口完成**：不加新工具
+- **B. 合并成一个 `manage_debug(action, ...)` 工具**：枚举 `start | attach | detach | restart | stop`
+- **C. 拆成 5 个独立工具**（最终）：`start_debug` / `attach_debug` / `detach_debug` / `restart_debug` / `stop_debug`
+
+**选定**：C。
+- A 拒绝：必须给 `init` / `attach` 进白名单，但这两个命令的参数（文件路径含空格、PID 进制混淆）极易写错，5s confirm 也很难看出"这段命令到底是要 attach 哪个 PID"；独立工具的 args JSON 在 confirm 对话框里清晰得多
+- B 拒绝：5 个 action 的参数 schema 各不相同（start 要 file/args/cwd，attach 要 pid，其他无参），合一个会把 schema 写成 union，LLM 容易漏参或乱填；分散成 5 个工具反而每个 schema 极简
+- C 接受：工具数 +5 看起来多，但每个 schema 干净；description 各自独立可写清楚 detach vs stop 的语义差别（不杀 vs 杀进程）；统一走 Write + 5s confirm + audit
+
+**代价 / 复盘**：
+- 工具总数 69→74；接近 LLM context 中 tool list 的甜区上限（>100 后 GPT/DeepSeek 选错率开始上升）
+- `start_debug` 用 `DbgCmdExec("init ...")` fire-and-forget，不等启动完成；LLM 需要后接 `wait_for_event(["DebugStarted"])` 自己同步——已在 description 写明
+- `restart_debug` 依赖 x64dbg 内部状态保留命令行 / cwd，没在工具参数里再传一遍；首次启动用 `start_debug` 走 init，restart 不能重设参数（要重设就再调 `start_debug`）
+
+---
+
+## 2026-05-28 · K-30：系统 API 高频符号黑名单 = 模块∧符号（否决「只看模块」与「只看符号」）
+
+**背景**：用户 LLM 自动调 `set_breakpoint("kernel32.LoadLibraryW")`，断在 LoadLibraryW 入口；进程启动加载阶段 LoadLibrary 每秒被调几十次，x64dbg 每次断点把整个进程暂停几百毫秒，**全局键鼠 hook 被频繁吃掉 → 整个桌面卡死**，只能 hard reset。
+
+**候选方案**：
+- **A. 拒绝所有系统模块下断**（按模块黑名单）：只要 `ntdll/kernel32/...` 都不让下
+- **B. 拒绝所有高频 API 下断**（按符号黑名单）：只要符号在 LoadLibrary/HeapAlloc/... 内就拒
+- **C. 模块 ∧ 符号 双条件**（最终）：必须**系统模块**且**热 API**才拒绝
+- **D. 不拒，只警告**：description 加红字，LLM 自己决定
+
+**选定**：C。
+- A 拒绝：用户合法用例「在 `ntdll.RtlInitUnicodeString` 上看参数」会被误杀（这 API 频率不算极高）
+- B 拒绝：用户自己实现的 `LoadLibrary` wrapper（如某些壳/loader）符号正好叫 `LoadLibrary`，但所在模块不是系统模块——这种应该让下断
+- D 拒绝：LLM 在自动模式下不会读 description 警告（已实测过 K-30 修复前的版本 LLM 完全无视"may freeze"提示）
+- C 双条件交集最小化误杀，"系统模块的高频 API 入口"几乎 100% 是危险点
+
+**代价 / 复盘**：
+- 维护两份名单成本：系统模块 24 项相对稳定；热 API 60 项可能漏（如 Win11 新增的 API、用户自定义工作流要看的 `Sleep` / `QueryPerformanceCounter` 也算热）
+- 拒绝时 description 给两条出路：`set_conditional_bp(condition=...)` 让内核过滤 / 调用方下断；亲测 LLM 看到后能正确改写
+- 仅对硬断 `type=execute` 拦截，write/access 类不拦（这些不会反复命中）
+- K-32 已把名单抽公共模块，未来加项只改一处
+
+---
+
+## 2026-05-28 · K-29：`search_pattern` 模块解算用 `ModSizeFromAddr` 替 `DbgEval`（否决「让 LLM 先 get_module_info」）
+
+**背景**：`search_pattern(pattern, module="kernel32.dll")` 长期报错 `"failed to resolve module range"`；定位原因是内部用 `DbgEval("kernel32:start")` / `DbgEval("kernel32:end")` 解算模块范围，但 x64dbg 表达式引擎对带 `.dll` 的模块名有时返回 0；同时 `agent_loop` 在工具 ok=false 时只 INFO 一行，LLM 看不到具体 error 字符串。
+
+**候选方案**：
+- **A. 文档化要求**：让用户/LLM 自己先 `get_module_info` 拿到 base/size，再走 `search_pattern(start=base, size=size)`，不修工具
+- **B. `search_pattern` 内部改用 `ModBaseFromName` + `ModSizeFromAddr`**（最终）：直接走稳定 SDK
+- **C. 改用 `DbgEval` 但带 fallback**：先 `kernel32:start`，再 `kernel32.dll:start`，再 `mod.base(kernel32)` 一路尝试
+
+**选定**：B + 同时修 agent_loop 让失败工具 WARN 出 error 文本。
+- A 拒绝：把工具的内部 brittleness 推给 LLM 不可接受，agent 调用路径越长越易跑偏
+- C 拒绝：多 fallback 仍可能在某些版本 x64dbg 全失败；SDK 函数是契约 API 比表达式稳
+- B 一步到位：`ModBaseFromName` 接 `"kernel32.dll"` / `"kernel32"` 都能解；`ModSizeFromAddr(base)` 直接拿尺寸
+
+**代价 / 复盘**：
+- `agent_loop` 加 WARN 是顺手活：之前只 INFO `"tool returned: ok=false"`，现在 WARN 带 `tool=... error=...`，复盘 .log 时省事很多
+- 暴露了一个隐含规范："工具失败 = WARN 级别"——后续新工具如果走自己的 result 构造跳过中央 dispatch，要注意手动 WARN
+
+---
+
+## 2026-05-28 · K-28：`patch_memory` 走 `MemPatch`，新增 `patch_file` 工具（否决「`patch_memory` 内部自动 patch_file」）
+
+**背景**：`patch_memory` 之前直接走 `DbgMemWrite`，写完字节就完事——但 x64dbg 内部 patch 系统（`Patches` tab）一无所知 → 不可在 UI 看到、不可撤销（`restore_patch` 找不到记录）、不可导出补丁文件（`patch_file` 命令找不到补丁）。
+
+**候选方案**：
+- **A. `patch_memory` 仍走 `DbgMemWrite`，再加一个 `register_patch(addr, original, new)` 工具让 LLM 显式登记**：拆两步
+- **B. `patch_memory` 内部改走 `DbgFunctions()->MemPatch`，自动登记**（最终的一半）：单工具内透明完成
+- **C. `patch_memory` 内部 `MemPatch` + 自动调 `PatchFile` 立即落盘**：彻底自动化
+- **D. B + 显式独立工具 `patch_file()` 让 LLM 自己决定何时落盘**（最终）
+
+**选定**：D = B + 新增 `patch_file`。
+- A 拒绝：LLM 容易忘记调 register_patch，留下 ghost write
+- C 拒绝：落盘是不可撤销操作，应该 LLM 显式确认；自动落盘 + 5s confirm 会让单次 patch_memory 弹两次 confirm 影响体验
+- D 平衡：patch_memory 永远登记到 Patches tab 让 restore 可用，但落盘是独立 step 走独立 confirm
+
+**代价 / 复盘**：
+- 工具数 68→69（K-28 之后）；description 在 `patch_memory` 加一段说明"已自动加入 Patches，可用 restore_patch 撤销，落盘请用 patch_file"
+- 旧版本残留的 ghost write（K-28 前用 DbgMemWrite 改过的字节）restore_patch 仍找不到——可接受，老 session 不追溯
+
+---
+
+## 2026-05-26 · 中文路径根治：边界转码 + 内部 UTF-8（否决全链 wchar）
+
+**背景**：x64dbg SDK 的 `PLUG_CB_INITDEBUG.szFileName` 是 ACP（中文系统=GBK），MSVC 的 `std::filesystem::path(std::string)` 把入参当 ACP 解码，导致中文路径全链失败：`fs::exists` 返回 false → `SessionStore` 永远不开 → UI 显示"未在调试"；历史浏览器读 db meta 也乱码。
+
+**候选方案**：
+- **A. 全链改 std::wstring / std::filesystem::path 内部统一 wchar**：把所有 `std::string` 路径字段改 `std::wstring`，SDK 边界 ACP→wchar，sqlite 走 `sqlite3_open16`，spdlog 开 `SPDLOG_WCHAR_FILENAMES`
+- **B. 边界转码 + 内部 UTF-8**：插件内部一律 `std::string`（UTF-8）；与 SDK / Win32 / `std::filesystem` 交互的"边界"做 `ansiToUtf8` / `utf8ToWide`；`fs::path` 用 `wstring` 构造规避 MSVC 把 string 当 ACP 的坑；sqlite 用 UTF-8 的 `sqlite3_open`（SQLite 官方就接 UTF-8）
+- **C. 折中：只修 ProjectContext 一处**：在 `onDebugStart` 入口 ANSI→UTF-8，下游不动
+
+**选定**：B。
+- A 改动面太大（meta_keys 值、SessionStore string 接口、tool result JSON、所有 log 字符串都要切 wstring），还会污染上层 LLM/JSON 序列化层；spdlog 全开 `SPDLOG_WCHAR_FILENAMES` 会改变 sink 模板签名，影响 audit logger 与未来扩展
+- C 治标不治本：sqlite_open / spdlog 路径仍走 ACP；旧库 meta 已经写坏的数据也修不了
+- B 改动局限在 `util/encoding` + 几个"边界文件"（plugin_callbacks / project_context / session_store / project_browser / paths / logging），内部 `std::string` 语义不变；后续 JSON 序列化、tool result、log 文本天然就是 UTF-8
+
+**代价 / 复盘**：
+- 必须养成"任何 `fs::path` 从 string 构造都必须走 `fsPathFromUtf8`"的纪律（评审检查点）
+- spdlog 路径 fallback 到 `utf8ToAnsi` —— ACP 表示不了的 Unicode 字符（极少见）日志会失败；用户能容忍
+- LLM 工具结果中的中文字符串若途经 SDK ANSI API 仍可能乱码（如 `DbgValToString` 一类），留 Group 5 S4 单独处理
+- 新增了 `EventBus::DbgEvent::ProjectStoreReady` 通知，避免轮询 `ProjectContext::store()`；选 EventBus 而非 Qt signal 因为项目本来就有总线、不再引入新机制
+
+---
+
 ## 2026-05-25 · G-2 显示位置选 agentStatusLabel_ 末尾拼接
 
 **背景**：G-2 prompt cache 观测需要在 UI 暴露 hit ratio，要决定显示位置。

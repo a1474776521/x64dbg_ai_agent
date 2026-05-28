@@ -55,6 +55,8 @@ set(PLUGIN_SOURCES
     ai/tools/annotation_tools.cpp
     ai/tools/program_map_tools.cpp
     ai/tools/advanced_bp_tools.cpp
+    ai/tools/bp_safety.cpp
+    ai/tools/bp_safety.h
     ai/tools/assembler_pattern_tools.cpp
     ai/tools/cfg_tool.cpp
     ai/tools/patch_misc_tools.cpp
@@ -126,6 +128,8 @@ set(PLUGIN_SOURCES
     ui/tool_confirm_dialog.h
     ui/tools_browser_dialog.cpp
     ui/tools_browser_dialog.h
+    ui/safety_browser_dialog.cpp
+    ui/safety_browser_dialog.h
 
     # util
     util/logging.cpp
@@ -139,6 +143,8 @@ set(PLUGIN_SOURCES
     util/hashing.cpp
     util/hashing.h
     util/http_options.h
+    util/encoding.cpp
+    util/encoding.h
 
     ${QRC_FILES}
 )

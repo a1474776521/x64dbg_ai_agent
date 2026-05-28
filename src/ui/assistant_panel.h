@@ -160,6 +160,10 @@ private:
     int64_t             currentSessionId_ = 0;
     QString             pendingModelForNewSession_;  // 用户已选模型但尚未创建会话时缓存
 
+    // S3：订阅 EventBus::ProjectStoreReady（后台线程装好 store 后广播），
+    // 用于刷新状态栏与会话列表（避免轮询 ProjectContext::store()）
+    std::uint64_t       projectStoreReadyToken_ = 0;
+
     static AssistantPanel* s_instance;
 };
 

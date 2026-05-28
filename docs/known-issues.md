@@ -185,7 +185,132 @@
 - **位置**：`src/ui/assistant_panel.cpp::setActivePreset`
 - **可能改进**：cache 状态独立小 label，或顶栏改两行布局
 
+### K-27：中文路径（被调程序 / 用户名 / APPDATA）全链支持 ✅ 已修复
+- **状态**：S3 (2026-05-26) 边界转码 + 内部 UTF-8 方案落地
+- **真正根因**：x64dbg SDK 的 `char*` 路径**本来就是 UTF-8**（`bridgemain.h:1477` 明确写 "code page is utf8"）。问题在于 **MSVC `std::filesystem::path(std::string)` 把入参按 ACP 解码**，UTF-8 的中文字节会被当 GBK 误读 → 路径乱码 → `fs::exists` 失败 → `ProjectContext::store` 永远 nullptr → "未在调试" / 历史浏览也读不到
+- **历史错判（已纠正）**：第一版修复以为 SDK 是 ACP，对 `szFileName` 强转 `ansiToUtf8`，反而把 UTF-8 当 GBK 二次解码，路径更乱（修了又坏）。第二版改为透传 + 内部 UTF-8、只在 `isValidUtf8` 失败时兜底 ansiToUtf8 才彻底好
+- **症状（修前）**：`logs/plugin.log` 出现 `main module path not exist: E:\gongju\jw???...\LgExe.exe`
+- **实现**：
+  - 新增 `util/encoding.{h,cpp}`：`ansiToUtf8 / utf8ToAnsi / wideToUtf8 / utf8ToWide / fsPathFromUtf8 / fsPathToUtf8 / isValidUtf8`
+  - `plugin/plugin_callbacks.cpp::cbInitDebug` 直接透传 SDK 字符串（不再强转 ANSI）
+  - `storage/project_context.cpp` 全链改用 `fsPathFromUtf8`（内部走 `wstring` 构造，绕开 MSVC ACP 解码坑）；后台 SHA 线程装好 store 后 `EventBus::publish(DbgEvent::ProjectStoreReady)`
+  - `storage/project_context.cpp::GetMainModulePath` 兜底分支也透传 + `isValidUtf8` 校验
+  - `util/paths.cpp` 从 `_dupenv_s` 切到 `_wdupenv_s`，避免中文用户名 / 中文 `APPDATA` 在转 string 时被截断
+  - `storage/session_store.cpp::open` sqlite3_open 用 `fsPathToUtf8`；构造尾部对旧库 `exe_path/exe_filename` 做 ACP→UTF-8 幂等迁移
+  - `storage/project_browser.cpp::openReadOnly` URI 路径走 `wideToUtf8(path.wstring())`
+  - `util/logging.cpp` spdlog 路径用 `utf8ToAnsi(fsPathToUtf8(...))` 折中（不引 `SPDLOG_WCHAR_FILENAMES` 宏避免全项目签名牵连）
+  - `ui/assistant_panel.cpp` 订阅 `DbgEvent::ProjectStoreReady` → marshal 到 GUI 线程刷新状态栏 + 会话列表
+- **边界遗留**：
+  - LLM 工具结果 / Agent stdout 中的中文字符串若途经 SDK ANSI API（罕见），仍可能乱码（留 S4 单独审查）
+  - 用户名包含 ACP 无法表示的 Unicode 字符时，spdlog 日志路径会失败（极少见；fallback 静默无日志）
+- **决策依据**：见 `decisions.md` 2026-05-26 条目（边界转码 vs 全 wchar）
+
+### K-28：`patch_memory` 走 DbgMemWrite 导致补丁不可见、不可撤销、不可导出 ✅ 已修复
+- **状态**：2026-05-26 同批改动 + 新增 `patch_file` 工具
+- **现象**：用 `patch_memory` 修改字节后，`list_patches` 看不到这条补丁，`restore_patch` 也撤不回；后续若要把所有补丁导出为 patched.exe 也漏掉这部分
+- **根因**：`data_write_tools.cpp::PatchMemoryTool::invoke` 调用的是 `DbgMemWrite`（朴素 WriteProcessMemory），它不会在 x64dbg 内部 Patch tracker 里登记；只有 `DBGFUNCTIONS->MemPatch / AssembleMemEx / SearchAndReplaceMem` 会
+- **副作用**：与 `assemble_at` / `pattern_replace` 走的写路径不一致 — 后两者补丁可见、`patch_memory` 不可见，LLM 用得越多越混乱
+- **修复**：
+  - `patch_memory` 改走 `DbgFunctions()->MemPatch`，与其余写工具一致
+  - description 顶上明说"会被 list_patches 看到 / restore_patch 撤销 / patch_file 导出"，减少 LLM 误用
+- **配套**：补齐缺失的最后一环 — 新增 `patch_file` 工具（`patch_misc_tools.cpp::PatchFileTool`），走 SDK `DBGFUNCTIONS->PatchFile`，支持按 module / addresses 过滤导出，等价 x64dbg GUI 的 File → Patch file...
+- **影响**：完整破解 / 打补丁工作流（patch 字节 → 列表审查 → 撤销不要的 → 导出 patched.exe）首次端到端打通
+
+### K-29：`search_pattern` 带 module 参数失败 / 工具失败时 agent 看不到 error ✅ 已修复
+- **状态**：2026-05-27
+- **现象 1（search_pattern）**：调 `search_pattern(pattern="48 8B ?? ??", module="LgExe.exe")` 返回 ok=false `eval failed: mod.size("LgExe.exe")`
+- **根因**：原实现走 `DbgEval("mod.size(\"name\")")` 算搜索区间长度，但 x64dbg 表达式求值器**不接受带引号的字符串参数**，永远 fail；同样写法 `mod.base()` 也不行
+- **修复**：`static_analysis_tools.cpp:325-336` 改用 `DbgFunctions()->ModSizeFromAddr(base)`（base 已由 `DbgModBaseFromName(name)` 拿到），不再走表达式层
+- **现象 2（agent 看不到 error）**：所有 69 个工具，凡是返回 ok=false 的，agent 拿到的 ToolResult 都只看到一个空 data；plugin.log 里也只打 `tool=xxx ok=false` 没具体 error
+- **根因**：`agent_loop.cpp:165` 只在 ok=true 路径打了 result，ok=false 路径忘记打 `tr.error`
+- **修复**：ok=false 时加 `XAI_LOG_WARN("tool {} failed: {}", name, tr.error)`，69 工具共享受益
+- **影响**：诊断工具失败现在有直接证据；search_pattern + module 路径打通
+- **位置**：`src/ai/tools/static_analysis_tools.cpp:325-336`、`src/ai/agent_loop.cpp:165-172`
+
+### K-30：系统 API 软断 / 硬断都会冻结操作系统 ✅ 已修复
+- **状态**：2026-05-27 两轮：第一轮挡 set_breakpoint，第二轮补 set_hw_breakpoint
+- **场景**：调试外挂程序 `���PVP.exe`，LLM 自主下断 `bp kernel32.LoadLibraryW` 排查注入，触发后**鼠标键盘全卡死，整个 Windows 桌面无响应**
+- **物理根因**（之前判断硬件断点"安全"是错的）：
+  - 被调试进程持有**全局键鼠 hook**（SetWindowsHookEx / Raw Input / 注入到 explorer / 反作弊心跳），它一被 x64dbg 暂停，hook 链上所有进程的输入都卡
+  - 外挂频繁 LoadLibrary / VirtualAlloc / EnterCriticalSection（百次/秒级），每次命中 x64dbg 处理 INT3 几十 ms，叠加暂停-恢复反复抖动 → 即使 run_continue 也"停不下来"（实测 17:03-17:04 plugin.log，run_continue 15 秒超时未停）
+  - **硬件执行断点也不安全**：DR0-DR3 不修改内存（不会触发反作弊 0xCC 校验），但每次命中仍暂停整个被调试进程所有线程，外挂的 hook 一样卡桌面
+- **修复**：`debug_write_tools.cpp::SetBreakpointTool` + `advanced_bp_tools.cpp::SetHwBreakpointTool` 都加同套防护
+  - `resolveBpAddr`：先 parseVa，失败 fallback `DbgEval`，支持 `kernel32.LoadLibraryW` 直接当 address（之前 LLM 必须先 eval_expression 拿 VA 再下断，绕路）
+  - `isSystemModule`：21 个系统 DLL 白名单（ntdll/kernel32/kernelbase/user32/gdi32/advapi32/ws2_32/...）
+  - `isHighFreqApi`：~50 个高频 API 黑名单（LoadLibrary*/Virtual*/Create*/Wait*/Peek*/Sleep*/EnterCriticalSection/QueryPerformanceCounter/...）
+  - `classifyBpAddr`：用 `DbgGetModuleAt` + `DbgGetLabelAt` 反查地址所在模块和符号；系统模块 + 热 API → dangerous=true
+  - SetBreakpointTool（软件断点全 type）+ SetHwBreakpointTool（仅 execute 类型）命中 dangerous → 返回 REFUSED + 明确的 3 个替代方案：
+    1. `set_conditional_bp` 加 `arg.get(0)` 等过滤条件（命中后 LLM 评估条件，不满足自动 resume，避免暂停被调试进程）
+    2. 调用方下断（`find_xrefs_to` / `locate_api_callers` 先找被调试模块内的 caller 再下断）
+    3. （明确**不再**推荐 type=hardware，第一轮文案是错的）
+  - 成功时回写 `module` / `symbol` 字段方便 LLM 知道下到了哪
+  - description 英中两版都加显式"freeze OS"警告，教 LLM 不要试图绕过
+- **未挡的路径**（已评估，故意放行）：
+  - `set_hw_breakpoint` type=write/access（数据断点对系统 API 入口很少用，且不是行执行频率）
+  - `set_conditional_bp`（条件断点本身就是给热 API 设计的安全方案）
+  - `run_dbg_command` 的 `bp` / `bpx` / `SetBPX` 命令（白名单工具，已要求 5s confirm；后续若实测有人绕过再补 token 解析）
+- **影响**：调试反作弊 / 外挂 / 全局 hook 类目标时不再因 LLM 自主下断系统 API 而冻结桌面
+- **位置**：`src/ai/tools/debug_write_tools.cpp`（SetBreakpointTool + 共享判定函数）、`src/ai/tools/advanced_bp_tools.cpp`（SetHwBreakpointTool + 同套判定函数的本地副本）
+- **技术债**：`resolveBpAddr` / `isSystemModule` / `isHighFreqApi` / `classifyBpAddr` 在两个 .cpp 各有一份副本；后续若加第三个断点类工具（如未来的 trace bp）应抽到 `tool_args_util.h` 或新建 `bp_safety.h`
+
+### K-31：LLM 无法启动 / 重启 / 附加 / 脱离 / 结束调试会话 ✅ 已修复
+- **状态**：2026-05-27
+- **现象**：LLM 尝试 "启动调试" 或 "重启调试" 都失败；走 `run_dbg_command("InitDebug ...")` 被拒（白名单不含），换走名字猜的工具（`start_debug` / `restart_debug`）发现根本不存在
+- **双重根因**：
+  1. `run_dbg_command` 白名单（`debug_write_tools.cpp:205`）只放行 bp/bpc/bphwc/bpd/bpe + run/StepInto/StepOver/StepOut/pause + db/dw/dd/dq，**完全没有** `InitDebug` / `init` / `Restart` / `attach` / `detach` / `StopDebug` / `stop`
+  2. 即使白名单放行，`RunDbgCommandTool::invoke` 顶上有 `if (!ctx.debuggerActive || !DbgIsDebugging()) return error("debugger is not active")`，**未调试时所有 run_dbg_command 都拒** —— 而 start_debug / attach 本来就是在未调试时调用的，永远过不去
+- **设计取舍**：会话生命周期类操作不放进 run_dbg_command 白名单，原因：
+  - 这五个操作语义差异大、危险等级不一（start 起新进程 / restart 杀重启 / detach 让进程裸跑 / stop 杀进程），不该塞在一个泛型逃生口里
+  - 每个都有特定参数（target_path / pid），用 schema 化的命名工具比 raw command 字符串更稳；LLM 也不容易拼错命令语法
+- **修复**：在 `debug_write_tools.cpp` 末尾新增 5 个专用工具，category=Write，requiresUserConfirmation=true（走 5s 倒计时弹窗）：
+  | 工具 | x64dbg 命令 | 守卫 | 备注 |
+  |---|---|---|---|
+  | `start_debug(target_path, command_line?)` | `InitDebug "path"[, cl]` | 已有会话 → 拒 | path 强加引号防空格切断 |
+  | `attach_debug(pid)` | `attach <hex_pid>` | 已有会话 → 拒 | x64dbg 数值默认 hex |
+  | `detach_debug()` | `detach` | 无会话 → 拒 | 进程继续裸跑 |
+  | `restart_debug()` | `Restart` | 无会话 → 拒 | 断点保留 |
+  | `stop_debug()` | `StopDebug` | 无会话 → no-op | 不算错 |
+- **工具总数**：69 → 74
+- **影响**：脱壳 / 多次取证 / attach 外部进程等场景下，LLM 可自主管理会话生命周期；之前必须用户手工操作 x64dbg GUI
+- **位置**：`src/ai/tools/debug_write_tools.cpp::StartDebugTool/AttachDebugTool/DetachDebugTool/RestartDebugTool/StopDebugTool` + 同文件 `registerDebugWriteTools` 末尾 5 行注册
+- **未做**：LLM 不能"启动调试到指定 OEP 后自动 wait_for_event"做成 atomic 工具 —— 留给 LLM 编排（start_debug → wait_for_event → 后续）。这样保持每个工具单一职责
+
+### K-32：白名单 / 黑名单分散在工具内部、不可观察、有重复定义 ✅ 已修复
+- **状态**：2026-05-28，结构重构 + UI 集成
+- **现象**：
+  1. 用户问"我怎么给 run_dbg_command 加白名单"找不到地方查；
+  2. K-30 的 `kSysMods` / `kHotApis` / `classifyBpAddr` 在 `debug_write_tools.cpp` 和 `advanced_bp_tools.cpp` 各有一份**完全相同的副本**，将来加新断点类工具会出现第三份；
+  3. 用户在 "已注册工具一览" 看不到 run_dbg_command 实际允许什么命令，也不知道 set_breakpoint 拒绝什么 API
+- **修复**：
+  - **重构**：新建 `src/ai/tools/bp_safety.{h,cpp}` 集中持有：
+    - `bpSysModules()` / `bpHotApis()` / `isSystemModule()` / `isHighFreqApi()` / `classifyBpAddr()` / `HotSpotInfo`
+    - `dbgCmdWhitelistDefaults()`（13 项默认硬集）/ `dbgCmdWhitelist()`（默认 + Config::extraDbgCmdWhitelist 合并集）
+  - `debug_write_tools.cpp` 和 `advanced_bp_tools.cpp` 删除本地副本，改 include bp_safety.h
+  - **UI 集成**：新建 `src/ui/safety_browser_dialog.{h,cpp}`，4 tab 视图：
+    1. **白名单** tab：表格列默认 / 用户追加双来源标签，带搜索 + 计数 + 双击复制
+    2. **系统模块黑名单** tab：24 个系统 DLL 名（无扩展、小写），带搜索
+    3. **高频 API 黑名单** tab：~60 个 API 符号名，带搜索
+    4. **如何配置** tab：完整 config.json 示例 + 一键打开/复制路径，提示"修改后必须重启 x64dbg"
+  - **交叉引用**：
+    - `tools_browser_dialog`（已注册工具一览）底部加 **「安全护栏…」** 按钮 → 打开 SafetyBrowserDialog
+    - 三个受影响的工具（`run_dbg_command` / `set_breakpoint` / `set_hw_breakpoint`）的详情窗里加 **「查看此工具的安全护栏…」** 按钮，自动跳到相关 tab
+- **设计取舍**：
+  - 白名单**只能追加不能从默认集移除**（在 SafetyBrowserDialog Tab1 显式说明）；要禁用默认命令必须改代码，避免用户/LLM 通过编辑配置绕开安全护栏
+  - `dbgCmdWhitelist()` 合并集是 `static once_flag`，**修改 config 必须重启插件**才生效；这是有意为之（避免运行时白名单漂移导致 audit 不一致）
+  - 黑名单（K-30 sys/hot）目前**不开放配置追加**——它们是"防卡死"的硬护栏，加错一条用户可能瞬间冻结桌面。未来若有合理用例可加 `extra_safe_apis`（白名单覆盖黑名单）字段
+- **影响**：
+  - 用户在 UI 上能完整看到所有 ACL 规则的具体内容
+  - 工具开发者：未来加第三个断点类工具直接 `#include "ai/tools/bp_safety.h"` 即可，无需复制粘贴
+- **位置**：
+  - `src/ai/tools/bp_safety.{h,cpp}` 新增
+  - `src/ai/tools/debug_write_tools.cpp:99-115` 重构后只剩注释说明（原 95-235 行删）
+  - `src/ai/tools/advanced_bp_tools.cpp:88-90` 同上
+  - `src/ui/safety_browser_dialog.{h,cpp}` 新增
+  - `src/ui/tools_browser_dialog.cpp::buildUi` + `showToolDetails` 加按钮
+  - `src/CMakeLists.txt:57-59` + `129-131` 加新文件
+
 ---
+
 
 ## ⚪ 未支持（设计取舍，不是 bug）
 

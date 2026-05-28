@@ -9,6 +9,7 @@
 #include <sqlite3.h>
 
 #include "storage/meta_keys.h"
+#include "util/encoding.h"
 #include "util/logging.h"
 #include "util/paths.h"
 
@@ -32,10 +33,15 @@ std::int64_t toEpochSeconds(const fs::file_time_type& ft) {
 // 但仍能读到已 checkpoint 的数据；旧库通常已无 WAL 残留。
 sqlite3* openReadOnly(const fs::path& path) {
     sqlite3* db = nullptr;
-    // sqlite URI：用 file: 前缀；Windows 路径需要把反斜杠改成正斜杠
+    // sqlite URI：用 file: 前缀；Windows 路径需要把反斜杠改成正斜杠。
+    // 关键：generic_string() 走 ACP，中文路径会乱码 → 用 fsPathToUtf8(generic) 走 UTF-8。
     std::string uri = "file:";
-    auto s = path.generic_string();  // forward slash
-    // URI 中需要把 ' '%20 等 escape，但常规 hex 文件名不含特殊字符
+    // 先取 wstring 把反斜杠替换为正斜杠，再转 UTF-8
+    std::wstring ws = path.wstring();
+    for (auto& c : ws) { if (c == L'\\') c = L'/'; }
+    std::string s = wideToUtf8(ws);
+    // URI 中需要把 ' '%20 等 escape，但常规 hex 文件名不含特殊字符；
+    // 中文目录段若存在，sqlite3 URI 解析按 UTF-8 处理，已在 fsPathToUtf8 中正确编码。
     uri.append(s);
     uri.append("?mode=ro&immutable=1");
     int rc = sqlite3_open_v2(uri.c_str(), &db,
@@ -102,7 +108,7 @@ std::vector<ProjectDbInfo> ProjectBrowser::listProjectDbs() {
         if (p.extension() != ".db") continue;
 
         ProjectDbInfo info;
-        info.sha256Hex = p.stem().string();
+        info.sha256Hex = p.stem().string();  // sha256 是 ASCII，安全
         info.path      = p;
         std::error_code ec2;
         info.sizeBytes = static_cast<std::uint64_t>(fs::file_size(p, ec2));
@@ -252,11 +258,11 @@ int ProjectBrowser::cleanupEmptyDbs(int minAgeDays, const std::string& activeSha
         std::error_code de;
         bool ok = fs::remove(p, de);
         if (!ok || de) {
-            XAI_LOG_WARN("cleanup: failed to remove {} ec={}", p.string(), de.message());
+            XAI_LOG_WARN("cleanup: failed to remove {} ec={}", fsPathToUtf8(p), de.message());
             continue;
         }
         ++deleted;
-        XAI_LOG_INFO("cleanup: removed empty/stale db {}", p.string());
+        XAI_LOG_INFO("cleanup: removed empty/stale db {}", fsPathToUtf8(p));
 
         for (const char* suf : {"-wal", "-shm", "-journal"}) {
             fs::path sidecar = p;

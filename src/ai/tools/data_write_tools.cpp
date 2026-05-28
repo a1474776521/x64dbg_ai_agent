@@ -33,6 +33,7 @@
 
 #include <Windows.h>
 #include "bridgemain.h"
+#include "_dbgfunctions.h"
 #include "_scriptapi_register.h"
 
 #include "util/logging.h"
@@ -261,7 +262,9 @@ public:
     bool requiresUserConfirmation() const override { return true; }
     std::string description() const override
     {
-        return "Write a sequence of raw bytes to memory at VA. "
+        return "Write a sequence of raw bytes to memory at VA and register the change "
+               "as a tracked patch (visible to list_patches, undoable by restore_patch, "
+               "exportable by patch_file). "
                "bytes_hex accepts \"DE AD BE EF\" / \"deadbeef\" / \"DE,AD,BE,EF\" "
                "(spaces/commas/colons/dashes as delimiters; no wildcards). "
                "Caller MUST verify the target is writable code/data; on protected pages "
@@ -269,7 +272,8 @@ public:
     }
     std::string descriptionZh() const override
     {
-        return "向指定 VA 写入一段原始字节。"
+        return "向指定 VA 写入一段原始字节，并登记为追踪补丁"
+               "（可被 list_patches 看到、restore_patch 撤销、patch_file 导出）。"
                "bytes_hex 接受 \"DE AD BE EF\" / \"deadbeef\" / \"DE,AD,BE,EF\" "
                "（空格 / 逗号 / 冒号 / 短横线作分隔符；不支持通配符）。"
                "调用方需自行确认目标可写；若是受保护页面将失败并返回出错地址。";
@@ -309,13 +313,21 @@ public:
         if (!checkMemRangeWritable(va, bytes.size(), err)) {
             r.ok = false; r.error = err; return r;
         }
-        if (!DbgMemWrite(static_cast<duint>(va), bytes.data(), bytes.size())) {
+        // 走 DBGFUNCTIONS->MemPatch 而非裸 DbgMemWrite，后者不会登记到 Patches 表，
+        // 导致 list_patches 看不到、restore_patch 撤不回、patch_file 也导不出。
+        // 见 docs/known-issues.md K-28。
+        const auto* fns = DbgFunctions();
+        if (!fns || !fns->MemPatch) {
+            r.ok = false; r.error = "DbgFunctions->MemPatch is null"; return r;
+        }
+        if (!fns->MemPatch(static_cast<duint>(va), bytes.data(),
+                           static_cast<duint>(bytes.size()))) {
             r.ok = false;
-            r.error = "DbgMemWrite failed at " + formatHexU64(va) +
+            r.error = "MemPatch failed at " + formatHexU64(va) +
                       " size=" + std::to_string(bytes.size());
             return r;
         }
-        XAI_LOG_INFO("patch_memory: wrote {} bytes at {}",
+        XAI_LOG_INFO("patch_memory: wrote {} bytes (tracked) at {}",
                      bytes.size(), formatHexU64(va).c_str());
         r.ok = true;
         r.data = {

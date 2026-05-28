@@ -27,6 +27,7 @@
 #include <Windows.h>
 
 #include "bridgemain.h"
+#include "_dbgfunctions.h"
 #include "_scriptapi_pattern.h"
 
 #include "util/logging.h"
@@ -319,16 +320,21 @@ public:
             const std::string mod = args["module"].get<std::string>();
             start = DbgModBaseFromName(mod.c_str());
             if (!start) {
-                r.ok = false; r.error = "module not found: " + mod;
+                r.ok = false;
+                r.error = "module not found: '" + mod + "' (try basename without extension, "
+                          "or call list_modules first to see exact names)";
                 return r;
             }
-            // 取模块 size：用 DbgMemFindBaseAddr 不行（只给单页），用 Eval 'mod.size(name)'
-            char expr[256];
-            std::snprintf(expr, sizeof(expr), "mod.size(\"%s\")", mod.c_str());
-            bool ok = false;
-            size = DbgEval(expr, &ok);
-            if (!ok || !size) {
-                r.ok = false; r.error = "failed to get size of module " + mod;
+            // 取模块 size：用 DBGFUNCTIONS->ModSizeFromAddr(base)，比 Eval 'mod.size(...)' 稳。
+            // 旧实现用 DbgEval("mod.size(\"name\")") 因为 x64dbg 表达式语法里函数参数不带引号，
+            // 一律失败（见 known-issues K-29）。
+            const auto* fns = DbgFunctions();
+            if (fns && fns->ModSizeFromAddr) {
+                size = fns->ModSizeFromAddr(start);
+            }
+            if (!size) {
+                r.ok = false;
+                r.error = "failed to get size of module '" + mod + "' (base=" + formatHexVa(static_cast<std::uint64_t>(start)) + ")";
                 return r;
             }
             scopeDesc = "module " + mod;

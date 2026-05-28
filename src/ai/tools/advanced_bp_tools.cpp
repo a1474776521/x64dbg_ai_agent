@@ -17,9 +17,12 @@
 #include "ai/tools/tool_args_util.h"
 #include "ai/tools/tool_context.h"
 #include "ai/tools/tool_registry.h"
+#include "ai/tools/bp_safety.h"
 
 #include <cstdio>
 #include <string>
+#include <unordered_set>
+#include <algorithm>
 
 #include <Windows.h>
 #include "bridgemain.h"
@@ -62,6 +65,31 @@ bool parseVa(const nlohmann::json& args, const char* key, std::uint64_t& out, st
     return false;
 }
 
+// 同 debug_write_tools.cpp::resolveBpAddr：支持 "kernel32.LoadLibraryW" 这种 module.symbol 语法
+// 见 known-issues K-30。
+bool resolveBpAddr(const nlohmann::json& args, const char* key,
+                   std::uint64_t& out, std::string& err)
+{
+    if (parseVa(args, key, out, err)) { err.clear(); return true; }
+    if (!args.contains(key) || !args[key].is_string()) return false;
+    const std::string expr = args[key].get<std::string>();
+    if (expr.empty()) { err = "empty address expression"; return false; }
+    bool ok = false;
+    duint v = DbgEval(expr.c_str(), &ok);
+    if (!ok || v == 0) {
+        err = "failed to resolve address: '" + expr +
+              "' (not a number/hex and not a valid x64dbg expression; "
+              "try eval_expression first, or check module is loaded)";
+        return false;
+    }
+    out = static_cast<std::uint64_t>(v);
+    err.clear();
+    return true;
+}
+
+// 系统模块 / 高频 API 黑名单 + classifyBpAddr：已抽到共享头 bp_safety.h（K-32 重构）。
+// 见 known-issues K-30 / K-32。
+
 }  // namespace
 
 // ============= S7-A set_hw_breakpoint =============
@@ -72,22 +100,36 @@ public:
     bool requiresUserConfirmation() const override { return true; }
     std::string description() const override
     {
-        return "Set a hardware breakpoint. type ∈ {execute,write,access}. "
+        return "Set a hardware breakpoint. 'address' accepts a VA or an x64dbg expression "
+               "(\"kernel32.LoadLibraryW\"). type ∈ {execute,write,access}. "
                "Only 4 HW BPs total (DR0-DR3); over-limit silently fails. "
-               "Use for data tracing (write/access) or stealth code BP.";
+               "WARNING: hardware breakpoints on hot system APIs in ntdll/kernel32/user32 "
+               "(LoadLibrary, VirtualAlloc, CreateFile, EnterCriticalSection, PeekMessage, ...) "
+               "will FREEZE the OS, because the debuggee gets paused hundreds of times per second "
+               "and if it holds global hooks (mouse/keyboard hooks, anti-cheat hooks), "
+               "the whole desktop becomes unresponsive. HW BPs are NOT a safe alternative to "
+               "soft BPs for hot APIs - use 'set_conditional_bp' with a filter, or break inside "
+               "the user-code caller (find_xrefs_to / locate_api_callers) instead.";
     }
     std::string descriptionZh() const override
     {
-        return "设置硬件断点。type ∈ {execute=执行 / write=写入 / access=访问}。"
+        return "设置硬件断点。'address' 支持 VA 或 x64dbg 表达式（\"kernel32.LoadLibraryW\"）。"
+               "type ∈ {execute=执行 / write=写入 / access=访问}。"
                "总共最多 4 个硬件断点（DR0-DR3），超限会静默失败。"
-               "适合数据追踪（写入/访问）或反检测的代码断点。";
+               "警告：在 ntdll/kernel32/user32 等系统 DLL 的高频 API "
+               "（LoadLibrary、VirtualAlloc、CreateFile、EnterCriticalSection、PeekMessage 等）"
+               "上下硬件断点也会冻结系统，因为被调试进程每秒被暂停几百次，"
+               "如果它持有全局键鼠 hook 或反作弊 hook，整个桌面都会卡死。"
+               "对高频 API 来说硬件断点并不是软件断点的安全替代 —— 必须改用 "
+               "set_conditional_bp（带过滤条件），或在调用方的用户代码里下断（find_xrefs_to / locate_api_callers）。";
     }
     nlohmann::json parametersSchema() const override
     {
         return {
             {"type","object"},
             {"properties", {
-                {"address", {{"type","string"},{"description","VA, decimal or 0x hex"}}},
+                {"address", {{"type","string"},
+                             {"description","VA (\"0x401000\") or x64dbg expression (\"kernel32.LoadLibraryW\")"}}},
                 {"type",    {{"type","string"},{"enum", nlohmann::json::array({"execute","write","access"})},
                              {"description","Trigger type; default execute"}}},
             }},
@@ -101,15 +143,40 @@ public:
             r.ok=false; r.error="debugger is not active"; return r;
         }
         std::uint64_t va = 0; std::string e;
-        if (!parseVa(args, "address", va, e)) { r.ok=false; r.error=e; return r; }
+        if (!resolveBpAddr(args, "address", va, e)) { r.ok=false; r.error=e; return r; }
         Script::Debug::HardwareType t = Script::Debug::HardwareExecute;
+        std::string typeStr = "execute";
         if (args.contains("type") && args["type"].is_string()) {
-            const auto s = args["type"].get<std::string>();
-            if      (s == "execute") t = Script::Debug::HardwareExecute;
-            else if (s == "write")   t = Script::Debug::HardwareWrite;
-            else if (s == "access")  t = Script::Debug::HardwareAccess;
+            typeStr = args["type"].get<std::string>();
+            if      (typeStr == "execute") t = Script::Debug::HardwareExecute;
+            else if (typeStr == "write")   t = Script::Debug::HardwareWrite;
+            else if (typeStr == "access")  t = Script::Debug::HardwareAccess;
             else { r.ok=false; r.error="invalid 'type': use execute/write/access"; return r; }
         }
+
+        // 高频系统 API 防护：execute 类型 + 系统模块 + 热 API → 拒绝
+        // write/access 是数据断点，对系统 API 入口下数据断点很少见，且语义不同，放行。
+        if (t == Script::Debug::HardwareExecute) {
+            HotSpotInfo hs = classifyBpAddr(va);
+            if (hs.dangerous) {
+                r.ok = false;
+                r.error =
+                    "REFUSED: hardware execute breakpoint on hot system API '" +
+                    hs.moduleName + "!" + hs.symbolName + "' (" + formatHexU64(va) + ") "
+                    "will freeze the OS - the debuggee is paused hundreds of times per second, "
+                    "and if it holds any global hook (mouse/keyboard/anti-cheat) the whole desktop "
+                    "becomes unresponsive (proven by 17:03-17:04 log run_continue timeout). "
+                    "Hardware BP is NOT a safe escape from the soft-BP refusal. Use: "
+                    "(1) set_conditional_bp with a filter on arg.get(0) etc. so only matching "
+                    "calls actually pause; "
+                    "(2) breakpoint inside the user-code caller of this API "
+                    "(call find_xrefs_to / locate_api_callers in the debuggee module first).";
+                XAI_LOG_WARN("set_hw_breakpoint REFUSED hot API: {}!{} at {}",
+                             hs.moduleName, hs.symbolName, formatHexU64(va).c_str());
+                return r;
+            }
+        }
+
         const bool ok = Script::Debug::SetHardwareBreakpoint(static_cast<duint>(va), t);
         if (!ok) {
             r.ok=false;
@@ -117,13 +184,17 @@ public:
                     " (possible cause: 4 HW BP slots exhausted)";
             return r;
         }
-        XAI_LOG_INFO("set_hw_breakpoint: va={} type={}", formatHexU64(va).c_str(),
-                     args.value("type", std::string("execute")).c_str());
+        XAI_LOG_INFO("set_hw_breakpoint: va={} type={}", formatHexU64(va).c_str(), typeStr.c_str());
         r.ok=true;
         r.data = {
             {"address", formatHexU64(va)},
-            {"type",    args.value("type", std::string("execute"))},
+            {"type",    typeStr},
         };
+        HotSpotInfo hs = classifyBpAddr(va);
+        if (!hs.moduleName.empty()) {
+            r.data["module"] = hs.moduleName;
+            if (!hs.symbolName.empty()) r.data["symbol"] = hs.symbolName;
+        }
         return r;
     }
 };

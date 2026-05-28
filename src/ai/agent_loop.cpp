@@ -165,6 +165,10 @@ int AgentLoop::run(AgentRunRequest&         req,
             XAI_LOG_INFO("AgentLoop iter#{} tool='{}' ok={} elapsed={}ms truncated={} args={}",
                          iter, tc.name, tr.ok, elapsedMs, rep.truncated,
                          argsDigest(tc.argumentsJson));
+            if (!tr.ok) {
+                XAI_LOG_WARN("AgentLoop iter#{} tool='{}' error: {}",
+                             iter, tc.name, tr.error.empty() ? "(empty)" : tr.error);
+            }
 
             ChatMessage tm;
             tm.role       = "tool";

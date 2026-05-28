@@ -12,6 +12,7 @@
 #include "trace/callstack_tracer.h"
 #include "trace/trace_recorder.h"
 #include "ui/assistant_panel.h"
+#include "util/encoding.h"
 #include "util/logging.h"
 
 namespace x64ai {
@@ -22,6 +23,9 @@ PLUG_CB_MENUENTRY g_lastEntry{};  // 占位，便于将来扩展
 
 void cbInitDebug(CBTYPE, PLUG_CB_INITDEBUG* info)
 {
+    // x64dbg SDK 约定 char* 即 UTF-8（见 bridgemain.h: "code page is utf8"）。
+    // 历史误判：曾把它当 ACP 强转 ansiToUtf8，导致 UTF-8 字节被当 GBK 二次解码 → 乱码 → fs 全失败。
+    // 现在直接透传；ProjectContext::onDebugStart 内部用 isValidUtf8 兜底，能容忍少数非 UTF-8 来源。
     std::string path = (info && info->szFileName) ? info->szFileName : "";
     XAI_LOG_INFO("CB_INITDEBUG: {}", path);
     ProjectContext::instance().onDebugStart(path);

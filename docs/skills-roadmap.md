@@ -4,7 +4,7 @@
 > **每次完成一个 S 段后，更新本表的 ✅/❌ 列 + Done 行**。
 > 横向对照：[features.md](features.md) 是最终能力快照；本文件是规划+进度。
 
-最后更新：2026-05-25（**S9 完成** = G-10 工具与预设管理 UI 重构 + 分类系统 + 工具描述中文化）
+最后更新：2026-05-28（**K-32 完成** = 白/黑名单抽公共模块 bp_safety + 「安全护栏」只读 UI；工具数累计 74；agent 能力评估见 `docs/agent-capability-assessment.md`）
 
 ---
 
@@ -179,6 +179,14 @@
 | **S9** | **工具/预设管理 UI 重构（G-10）+ 工具描述中文化（G-9 A 档）+ 分类系统** | **0** | **0** | **v13** | ✅ `s9-done` |
 | **S9 后续** | **场景预设 PHASE 0 verdict gate + 新增 sample-triage 预检（方案 C）** | **0** | **1** | **v14** | ✅（未 tag） |
 | **G-2** | **DeepSeek / Copilot prompt cache 命中观测（usage 通路 + UI 显示 + `[G-2 CACHE]` 日志）** | **0** | **0** | — | ✅（commit `5b42e52`，未 tag） |
+| **K-27** | **中文路径根治：边界 ANSI→UTF-8 + 内部全 UTF-8（util/encoding + plugin_callbacks/project_context/session_store/project_browser/paths/logging 边界改造 + G4 旧库幂等迁移）** | **0** | **0** | — | ✅（未 tag） |
+| **K-28** | **`patch_memory` 改走 `MemPatch` 让补丁可见/可撤销/可导出 + 新增 `patch_file` 工具显式落盘** | **+1**（patch_file） | **0** | — | ✅（未 tag） |
+| **K-29** | **`search_pattern` 用 `ModSizeFromAddr` 替 `DbgEval` 修 module 参数失败 + agent_loop 失败工具 WARN 出 error 文本** | **+1**（search_pattern） | **0** | — | ✅（未 tag） |
+| **K-30** | **系统 API 高频符号断点防护（resolveBpAddr + isSystemModule + isHighFreqApi + classifyBpAddr，作用于 `set_breakpoint`/`set_hw_breakpoint`；description 加 freeze warning）** | **0** | **0** | — | ✅（未 tag） |
+| **K-31** | **会话生命周期五件套：`start_debug`/`attach_debug`/`detach_debug`/`restart_debug`/`stop_debug`（全 Write + 5s confirm + audit）** | **+5** | **0** | — | ✅（未 tag） |
+| **K-32** | **白/黑名单抽 `bp_safety.{h,cpp}` 公共模块 + 「安全护栏」只读 UI（`SafetyBrowserDialog` 4 tab）+ config.json 可追加 `extra_dbg_cmd_whitelist`** | **0** | **0** | — | ✅（未 tag） |
+
+> 工具总数：S8=63 → K-28=64 → K-29=65 → K-31=70 → 当前 **74**（含 K-27 之前的 S9 增量；详见 `docs/features.md §11 工具清单`）。
 
 ---
 

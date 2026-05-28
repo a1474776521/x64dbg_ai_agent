@@ -48,7 +48,9 @@ enum class DbgEvent : std::uint8_t {
     Stepped      = 3,   // CB_STEPPED
     DebugStarted = 4,   // 预留（CB_INITDEBUG 已由 ProjectContext 直接处理）
     DebugStopped = 5,   // 预留
-    _Count       = 6,
+    ProjectStoreReady = 6, // S3：ProjectContext 后台线程装好 store 后广播（UI 刷新状态栏/会话列表）
+                           // payload.raw = const std::string* (UTF-8 sha256Hex；handler 内须立刻拷贝)
+    _Count       = 7,
 };
 
 struct DbgEventPayload {

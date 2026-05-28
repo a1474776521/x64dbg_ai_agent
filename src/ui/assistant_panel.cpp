@@ -32,6 +32,7 @@
 #include "ai/tools/tool_registry.h"
 #include "_plugins.h"
 #include "bridgemain.h"
+#include "dbg/event_bus.h"
 #include "debugger/disasm_context.h"
 #include "storage/project_context.h"
 #include "storage/session_store.h"
@@ -303,10 +304,31 @@ AssistantPanel::AssistantPanel(QWidget* parent)
     }
     rebuildAgentMenu();
     // toolsMenu 已废弃，工具一览改为 openToolsBrowser() 按需弹窗
+
+    // S3：订阅 ProjectStoreReady —— 后台 SHA256 线程装好 store 后会 publish，
+    // 这里 marshal 到 GUI 线程刷新状态栏 + 会话列表。
+    // handler 在 publish 线程同步执行，必须短小：只做 QMetaObject::invokeMethod。
+    projectStoreReadyToken_ = EventBus::instance().subscribe(
+        DbgEvent::ProjectStoreReady,
+        [](const DbgEventPayload& /*p*/) {
+            // 不依赖 payload.raw（已是栈拷贝），直接读 ProjectContext 单例。
+            if (!s_instance) return;
+            QMetaObject::invokeMethod(s_instance, [self = s_instance]() {
+                self->refreshSessionPanel();   // 内部已 updateStatusBar()
+                self->chat_->appendSystemNote(
+                    QStringLiteral("项目已就绪：%1")
+                        .arg(QString::fromStdString(
+                            ProjectContext::instance().projectId().substr(0, 12))));
+            }, Qt::QueuedConnection);
+        });
 }
 
 AssistantPanel::~AssistantPanel()
 {
+    if (projectStoreReadyToken_) {
+        EventBus::instance().unsubscribe(projectStoreReadyToken_);
+        projectStoreReadyToken_ = 0;
+    }
     if (s_instance == this) s_instance = nullptr;
 }
 

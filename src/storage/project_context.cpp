@@ -9,7 +9,9 @@
 #include "_scriptapi_module.h"
 #include "bridgemain.h"
 
+#include "dbg/event_bus.h"
 #include "storage/meta_keys.h"
+#include "util/encoding.h"
 #include "util/hashing.h"
 #include "util/logging.h"
 
@@ -21,11 +23,22 @@ ProjectContext& ProjectContext::instance() {
 }
 
 void ProjectContext::onDebugStart(const std::string& filePath) {
+    // 入参 filePath 约定为 UTF-8（cbInitDebug 已在边界完成 ANSI->UTF-8）。
+    // 兜底：如果上层漏转码且包含非法 UTF-8 字节，则按 ACP 再补一次。
     std::string path = filePath;
+    if (!path.empty() && !isValidUtf8(path)) {
+        XAI_LOG_WARN("ProjectContext::onDebugStart: filePath not valid UTF-8, fallback ansiToUtf8");
+        path = ansiToUtf8(filePath);
+    }
     if (path.empty()) {
         char buf[MAX_PATH] = {};
         if (Script::Module::GetMainModulePath(buf)) {
+            // x64dbg SDK char* 即 UTF-8；直接使用，必要时下方 isValidUtf8 兜底。
             path = buf;
+            if (!path.empty() && !isValidUtf8(path)) {
+                XAI_LOG_WARN("GetMainModulePath returned non-UTF-8 bytes, fallback ansiToUtf8");
+                path = ansiToUtf8(buf);
+            }
         }
     }
     if (path.empty()) {
@@ -37,7 +50,7 @@ void ProjectContext::onDebugStart(const std::string& filePath) {
     const uint64_t myGen = ++generation_;
     {
         std::lock_guard<std::mutex> lk(mtx_);
-        mainModulePath_ = path;
+        mainModulePath_ = path;  // UTF-8
         projectId_.clear();
         store_.reset();
     }
@@ -47,7 +60,8 @@ void ProjectContext::onDebugStart(const std::string& filePath) {
     // 后台线程：SHA256 + sqlite 打开 + meta 写。完成后比较 generation 决定是否安装。
     std::thread([this, path, myGen]() {
         std::error_code ec;
-        auto fp = std::filesystem::path(path);
+        // 关键：fs::path 必须用 UTF-8 -> wstring 构造，否则 MSVC 按 ACP 解码中文路径会乱码。
+        auto fp = fsPathFromUtf8(path);
         if (!std::filesystem::exists(fp, ec)) {
             XAI_LOG_ERROR("main module path not exist: {}", path);
             if (myGen == generation_.load()) indexing_.store(false);
@@ -70,8 +84,8 @@ void ProjectContext::onDebugStart(const std::string& filePath) {
         auto store = std::make_shared<SessionStore>(sha);
         if (store && store->isOpen()) {
             auto epoch = std::to_string(static_cast<long long>(std::time(nullptr)));
-            store->setMeta(meta_keys::kExePath,     path);
-            store->setMeta(meta_keys::kExeFilename, fp.filename().string());
+            store->setMeta(meta_keys::kExePath,     path);                        // UTF-8
+            store->setMeta(meta_keys::kExeFilename, fsPathToUtf8(fp.filename())); // UTF-8
             store->setMetaIfAbsent(meta_keys::kFirstSeen, epoch);
             store->setMeta(meta_keys::kLastSeen,    epoch);
         }
@@ -88,6 +102,12 @@ void ProjectContext::onDebugStart(const std::string& filePath) {
         }
         indexing_.store(false);
         XAI_LOG_INFO("project opened: gen={} sha256={} path={}", myGen, sha, path);
+
+        // S3：广播 store 已就绪；UI 侧（AssistantPanel/session_list）订阅后刷新状态栏与会话列表。
+        // payload.raw 指向 sha 的栈拷贝，handler 必须同步消费完（publish 同步触发）。
+        DbgEventPayload p{};
+        p.raw = const_cast<std::string*>(&sha);
+        EventBus::instance().publish(DbgEvent::ProjectStoreReady, p);
     }).detach();
 }
 

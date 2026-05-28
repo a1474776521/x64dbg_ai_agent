@@ -7,6 +7,7 @@
 
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -47,6 +48,13 @@ struct AppConfig {
     // 流式低速阈值（秒）：连续 N 秒未收到任何字节即视为断流并中断。
     // 防止真正的网络挂死把整条请求拖到 streamTimeoutMs 才退出。
     int                   streamLowSpeedSec = 30;
+
+    // run_dbg_command 工具的【附加白名单】，与代码内置的硬白名单求并集。
+    // 内置白名单见 debug_write_tools.cpp::dbgCmdWhitelist() 默认集；
+    // 这里允许用户在 config.json 用 "extra_dbg_cmd_whitelist": ["bpdll","bcdll"] 自加命令。
+    // 命令名按 x64dbg 命令首 token 写，大小写不敏感（内部统一转小写比较）。
+    // 注意：这只能添加，不能从默认集移除（移除得改代码，避免误关键护栏）。
+    std::vector<std::string> extraDbgCmdWhitelist;
 };
 
 class Config {

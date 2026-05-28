@@ -13,6 +13,8 @@
 #endif
 #include <sqlite-vec.h>
 
+#include "storage/meta_keys.h"
+#include "util/encoding.h"
 #include "util/logging.h"
 #include "util/paths.h"
 
@@ -56,6 +58,26 @@ SessionStore::SessionStore(const std::string& projectSha256Hex, int embeddingDim
     ensureVecAutoExtension();
     if (!open() || !initSchema()) {
         if (db_) { sqlite3_close(db_); db_ = nullptr; }
+        return;
+    }
+    // S3-G4：旧库 meta 字段（exe_path/exe_filename）2026-05-25 之前可能
+    // 以 ACP（GBK）写入。检测非法 UTF-8 即按 ACP 重解码后回写为 UTF-8，
+    // 确保 UI / 历史浏览器读出来不再乱码。
+    // 该迁移幂等：合法 UTF-8 会跳过；只在首次打开旧库时触发一次。
+    if (db_) {
+        for (const char* key : { meta_keys::kExePath, meta_keys::kExeFilename }) {
+            auto v = getMeta(key);
+            if (!v || v->empty()) continue;
+            if (isValidUtf8(*v)) continue;
+            std::string fixed = ansiToUtf8(*v);
+            if (fixed.empty() || !isValidUtf8(fixed)) {
+                XAI_LOG_WARN("meta migrate skip key={} (ACP decode failed)", key);
+                continue;
+            }
+            setMeta(key, fixed);
+            XAI_LOG_INFO("meta migrate ACP->UTF-8 key={} old_bytes={} new={}",
+                         key, v->size(), fixed);
+        }
     }
 }
 
@@ -67,7 +89,10 @@ SessionStore::~SessionStore() {
 }
 
 bool SessionStore::open() {
-    auto path = projectDbPath(projectId_).string();
+    // sqlite3_open 接 UTF-8 路径（SQLite 官方约定）。
+    // 关键：path.string() 在 MSVC 走 ACP，中文路径会乱码 → 必须 fsPathToUtf8。
+    auto fp   = projectDbPath(projectId_);
+    auto path = fsPathToUtf8(fp);
     int rc = sqlite3_open(path.c_str(), &db_);
     if (rc != SQLITE_OK) {
         XAI_LOG_ERROR("sqlite_open failed rc={} path={}", rc, path);

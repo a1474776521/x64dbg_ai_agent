@@ -1,6 +1,7 @@
 // ui/tools_browser_dialog.cpp
 #include "ui/tools_browser_dialog.h"
 #include "ui/preset_editor_dialog.h"   // for prettyGroupName
+#include "ui/safety_browser_dialog.h"
 
 #include "ai/tools/tool_registry.h"
 #include "ai/agent_preset.h"
@@ -139,10 +140,19 @@ void ToolsBrowserDialog::buildUi()
     openEditorBtn_ = new QPushButton(QStringLiteral("打开工作流编辑器…"), this);
     openEditorBtn_->setToolTip(QStringLiteral(
         "想修改「当前工作流到底启用哪些工具」请去工作流编辑器"));
+    auto* safetyBtn = new QPushButton(QStringLiteral("安全护栏…"), this);
+    safetyBtn->setToolTip(QStringLiteral(
+        "查看 run_dbg_command 白名单、K-30 系统模块/高频 API 黑名单、"
+        "以及如何在 config.json 追加白名单"));
     auto* bb = new QDialogButtonBox(QDialogButtonBox::Close, this);
+    bb->addButton(safetyBtn,      QDialogButtonBox::ActionRole);
     bb->addButton(openEditorBtn_, QDialogButtonBox::ActionRole);
     connect(bb, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(openEditorBtn_, &QPushButton::clicked, this, &ToolsBrowserDialog::onOpenPresetEditor);
+    connect(safetyBtn, &QPushButton::clicked, this, [this]{
+        SafetyBrowserDialog dlg(this, SafetyBrowserDialog::TabWhitelist);
+        dlg.exec();
+    });
 
     // ---- 装配 ----
     auto* lay = new QVBoxLayout(this);
@@ -430,6 +440,27 @@ void ToolsBrowserDialog::showToolDetails(QTreeWidgetItem* leaf)
     auto* bb = new QDialogButtonBox(QDialogButtonBox::Close, &dlg);
     bb->addButton(copyNameBtn,   QDialogButtonBox::ActionRole);
     bb->addButton(copySchemaBtn, QDialogButtonBox::ActionRole);
+
+    // K-32：对受安全护栏影响的工具加跳转按钮
+    SafetyBrowserDialog::InitialTab safetyTab = SafetyBrowserDialog::TabWhitelist;
+    bool showSafetyBtn = false;
+    if (name == "run_dbg_command") {
+        showSafetyBtn = true; safetyTab = SafetyBrowserDialog::TabWhitelist;
+    } else if (name == "set_breakpoint" || name == "set_hw_breakpoint") {
+        showSafetyBtn = true; safetyTab = SafetyBrowserDialog::TabSysModules;
+    }
+    if (showSafetyBtn) {
+        auto* safetyBtn = new QPushButton(QStringLiteral("查看此工具的安全护栏…"), &dlg);
+        safetyBtn->setToolTip(name == "run_dbg_command"
+            ? QStringLiteral("查看 run_dbg_command 白名单（默认 + 用户追加）")
+            : QStringLiteral("查看 K-30 系统模块 / 高频 API 黑名单"));
+        bb->addButton(safetyBtn, QDialogButtonBox::ActionRole);
+        connect(safetyBtn, &QPushButton::clicked, &dlg, [&dlg, safetyTab]{
+            SafetyBrowserDialog sb(&dlg, safetyTab);
+            sb.exec();
+        });
+    }
+
     connect(copyNameBtn, &QPushButton::clicked, &dlg, [name]() {
         QGuiApplication::clipboard()->setText(fromStd(name));
     });

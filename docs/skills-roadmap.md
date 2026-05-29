@@ -4,7 +4,7 @@
 > **每次完成一个 S 段后，更新本表的 ✅/❌ 列 + Done 行**。
 > 横向对照：[features.md](features.md) 是最终能力快照；本文件是规划+进度。
 
-最后更新：2026-05-28（**K-32 完成** = 白/黑名单抽公共模块 bp_safety + 「安全护栏」只读 UI；工具数累计 74；agent 能力评估见 `docs/agent-capability-assessment.md`）
+最后更新：2026-05-28（**K-34 完成** = malware-triage 升级 = 新增 `scan_strings` + `analyze_pe_header` 两个取证工具 + Phase 0/1/2/3 量化评分 + ATT&CK 映射；工具数 74 → **76**）
 
 ---
 
@@ -185,6 +185,7 @@
 | **K-30** | **系统 API 高频符号断点防护（resolveBpAddr + isSystemModule + isHighFreqApi + classifyBpAddr，作用于 `set_breakpoint`/`set_hw_breakpoint`；description 加 freeze warning）** | **0** | **0** | — | ✅（未 tag） |
 | **K-31** | **会话生命周期五件套：`start_debug`/`attach_debug`/`detach_debug`/`restart_debug`/`stop_debug`（全 Write + 5s confirm + audit）** | **+5** | **0** | — | ✅（未 tag） |
 | **K-32** | **白/黑名单抽 `bp_safety.{h,cpp}` 公共模块 + 「安全护栏」只读 UI（`SafetyBrowserDialog` 4 tab）+ config.json 可追加 `extra_dbg_cmd_whitelist`** | **0** | **0** | — | ✅（未 tag） |
+| **K-33** | **用户可配置 5s confirm 豁免（`config.json::auto_approve_tools` + 5 项硬黑名单）+ ToolConfirmDialog 加 `Ctrl+Enter` 快捷键 + SafetyBrowserDialog 新增 Tab4「Confirm 豁免」** | **0** | **0** | — | ✅（未 tag） |
 
 > 工具总数：S8=63 → K-28=64 → K-29=65 → K-31=70 → 当前 **74**（含 K-27 之前的 S9 增量；详见 `docs/features.md §11 工具清单`）。
 

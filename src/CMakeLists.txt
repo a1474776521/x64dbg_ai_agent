@@ -57,11 +57,15 @@ set(PLUGIN_SOURCES
     ai/tools/advanced_bp_tools.cpp
     ai/tools/bp_safety.cpp
     ai/tools/bp_safety.h
+    ai/tools/confirm_policy.cpp
+    ai/tools/confirm_policy.h
     ai/tools/assembler_pattern_tools.cpp
     ai/tools/cfg_tool.cpp
     ai/tools/patch_misc_tools.cpp
     ai/tools/anti_debug_tools.cpp
     ai/tools/forensic_tools.cpp
+    ai/tools/scan_strings_tool.cpp
+    ai/tools/analyze_pe_header_tool.cpp
     ai/tools/seh_tool.cpp
     ai/tools/injection_stack_tools.cpp
     ai/tools/trace_error_func_tools.cpp
@@ -164,6 +168,7 @@ add_x64dbg_plugin(${PLUGIN_NAME}
         unofficial::sqlite3::sqlite3
         OpenSSL::SSL
         OpenSSL::Crypto
+        pe-parse::pe-parse
     PRIVATE_INCLUDES
         "${CMAKE_CURRENT_SOURCE_DIR}"
     DEFINES

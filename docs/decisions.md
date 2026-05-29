@@ -12,6 +12,80 @@
 
 ---
 
+## 2026-05-28 · K-34：malware-triage 升级方案选型（否决「轻量 prompt-only」「重量 YARA+sandbox」「LIEF」）
+
+**背景**：原 `malware-triage` 预设证据链单薄（仅靠 import 表关键字 + 行为面 6 步），无量化、无 ATT&CK 标准化输出。用户希望"更准确判断被调试程序是否存在恶意代码"。
+
+**候选方案（推进力度）**：
+- **A. 轻量级**：只改 system prompt + enabledTools，纯 prompt 工程。覆盖问题 1/2/5/8，不动代码
+- **B. 中量级**：+2 个取证工具（scan_strings 内存字符串扫描 + analyze_pe_header PE 头深度），~800 行代码
+- **C. 重量级**：B + YARA 引擎集成 + 规则集维护
+- **D. 顶配**：C + 受控动态行为采集（snapshot/sandbox + 网络监听）
+
+**选定**：B + ATT&CK prompt 映射（中量级 + 量化评分）。
+- A 不够：核心缺口是字符串挖掘 + PE 头分析，纯 prompt 补不上——LLM 没看到字符串就编不出 C2 endpoint
+- C 体积代价过大（libyara + 规则集生态维护成本 vs ROI 不匹配，且本项目定位是"工具增强"非"AV 厂商"）
+- D 与本预设"严格只读 = 数字取证规范"职责定位冲突，应留给 `unpack-helper` / `behavioral-watcher` 等专项预设
+- B 平衡：~820 行新代码、+2.74 MB 体积、覆盖 80% 教科书级 IOC，"够用就停"原则
+
+**子选型**：
+- **PE 解析库**：LIEF（重）vs pe-parse 2.1（轻）vs 手写。选 pe-parse —— 500KB vs 10MB+ + 编译 30s vs 15-20min；Authenticode 仅检"存在性"（链验证留给外部 sigcheck.exe）
+- **scan_strings 容量**：64MB 扫描 / 2000 条返回——平衡 LLM token 上限与典型样本大小
+- **动态采集**：保持纯只读（数字取证规范明确禁止动态污染样本）
+- **ATT&CK 映射**：要——每个 IOC 标 technique ID，便于与外部 IOC 库交叉
+- **量化评分 rubric**：在 system prompt 里硬编码权重表（PE risk_score 1.0x + 注入 import +6 each cap +25 + ...），让 LLM 算出 0-100 分而不是定性"疑似"
+
+**取舍**：
+- 放弃了 YARA 引擎 → 牺牲 family-level 归属，仅做 capability-level 判定
+- 放弃了 image-mapped 内存解析 → entropy / Authenticode 数据从磁盘文件读（image mapped 后 raw section data 不可信）
+- 放弃了"完美 import 解析"→ 如果样本用 GetProcAddress 动态解析则 import 表干净，仅靠 scan_strings 兜底
+
+**流程代价**：vcpkg.json 加 pe-parse 依赖；顶层 CMakeLists `find_package(pe-parse CONFIG REQUIRED)`；src/CMakeLists `target_link pe-parse::pe-parse`。**重大 include 顺序坑：`<pe-parse/parse.h>` 必须在 `<Windows.h>` 之前 include**——二者都定义 `IMAGE_SUBSYSTEM_*` / `IMAGE_SCN_*` / `RT_*` 同名符号，pe-parse 是 constexpr 而 Windows.h 是宏，顺序错了触发 C2059 / C2737 一长串。
+
+**复盘触发**：
+- 若用户报告"评分系统给出离谱结论"（高分良性 / 低分明确恶意），重审 PHASE 3 rubric 权重
+- 若发现 80% 的真实样本都需要 YARA 才能定 family，重新评估 C 方案
+
+---
+
+## 2026-05-28 · K-33：Confirm 豁免黑名单宽松化 + Ctrl+Enter 快捷键（否决「UI 可编辑豁免」与「Enter 单键加速」）
+
+**背景**：S3 引入的 5s confirm 在 K-31 加完会话生命周期工具后已应用到 ~25 个写工具。一个 30 轮 agent task 里用户被弹 20+ 次 `set_label` / `set_comment` / `add_function` 这种几乎没风险的写工具弹窗，每次 5s 才能允许。同时倒计时结束后只能鼠标点按钮，ESC/Enter 又被绑成"拒绝"（安全默认），键盘党加速无门。
+
+**候选方案（豁免范围）**：
+- **A. 保守豁免**：仅允许 6-8 项明确低风险写工具豁免（set_label / set_comment / add_function / restore_patch / remove_breakpoint / remove_hw_breakpoint / set_flag / set_conditional_bp）；其余 ~17 项一律强制 confirm
+- **B. 宽松豁免**（最终）：只设 5 项黄金黑名单强制 confirm（run_dbg_command / start_debug / attach_debug / stop_debug / patch_file），其余 ~20 项允许用户在 config.json 显式列入豁免
+- **C. 无黑名单**：任何写工具都可豁免，包括 run_dbg_command
+
+**候选方案（豁免配置入口）**：
+- **D. config.json 编辑 + 重启**（最终）：与 K-32 白名单模式一致
+- **E. UI 实时编辑**：在 SafetyBrowserDialog 加复选框直接勾选
+- **F. 预设字段**：把豁免集放进 agent_preset 让每个工作流单独配置
+
+**候选方案（快捷键）**：
+- **G. Ctrl+Enter / Ctrl+Return**（最终）：业界惯用「危险操作确认」组合键
+- **H. Enter 单键**：与默认 OK 行为一致，但当前 ESC/Enter 已被绑成"拒绝"——改 Enter 会破坏安全默认
+- **I. Alt+A**：Qt 加速键风格，但 Alt 修饰键在某些 Windows 输入法下被吞
+
+**选定**：B + D + G。
+
+**理由**：
+- A 拒绝：用户群里有人专门做长 task 自动化，6-8 项太少缓解不了痛点；维护"哪些工具足够低风险"的判断又会随时间漂移
+- C 拒绝：`run_dbg_command` 是命令逃生口（白名单内的任意命令），跳过 confirm 等于把整个攻击面拱手；`start_debug` / `attach_debug` 会启动/接管进程；`stop_debug` 直接杀进程；`patch_file` 落盘不可撤销——这 5 项失去 confirm 就等于失去最后一道人工把关
+- E 拒绝：UI 可编辑会引入 prompt injection 攻击面（LLM 可能诱导用户点"豁免所有"勾选框；运行时切换豁免会让 audit log 同一类 tool 时而 `confirmed` 时而 `auto_approved` 解释不清——保留"必须手编 config.json + 重启"的物理摩擦是有意为之
+- F 拒绝：豁免是用户全局偏好（"我信任 set_label 这类标注工具"），不是工作流维度的策略；放进预设会让用户在每个新预设里重新配，反而退化
+- H 拒绝：Enter 在 5s 内会被用户手贱按到，破坏"按错就过"防护——Ctrl+Enter 需要双键组合天然防误触
+- I 拒绝：Alt 修饰键与 Qt 的 `&按钮` mnemonic 容易冲突；中文输入法下 Alt 还可能被切换法事件吞
+
+**代价 / 复盘**：
+- 仍写 audit log：豁免 ≠ 不记录。`phase: "auto_approved"` 让事后复盘"什么时候改过这个 dword"仍可 jq/grep；audit 磁盘开销近零（rotating 4MB×10）
+- `Ctrl+Enter` 在倒计时未到时无效，靠 lambda 显式检查 `allowButton_->isEnabled()`；不能直接 connect 到 `accept()`——某些 Qt 版本对 disabled QPushButton 的 shortcut 仍会触发槽
+- 与 K-32 一致走 `std::once_flag` 合并，修改后**必须重启插件**才生效；如果用户编辑完没重启会以为没生效——已在 SafetyBrowserDialog Tab4/Tab5 显式提示
+- 黑名单后续扩展空间：未来若加新的"会写盘 / 会启动进程 / 会杀进程"类工具，需要同步入 `confirmHardEnforced()` 函数级 static set；这是新工具 PR 的 checklist item
+- 用户实测豁免 8 项常用低风险写工具后，30 轮 task 平均少弹 15+ 次
+
+---
+
 ## 2026-05-28 · K-32：白/黑名单抽公共模块 + 独立只读 UI（否决「主表加列」与「UI 可编辑」）
 
 **背景**：K-30 引入的 `kSysMods` / `kHotApis` / `classifyBpAddr` 在 `debug_write_tools.cpp` 和 `advanced_bp_tools.cpp` 各有一份完全相同的副本；未来加第三个断点类工具会出现第三份。同时用户问"我怎么知道 `run_dbg_command` 允许什么命令" / "怎么扩白名单"找不到地方，「已注册工具一览」也没暴露 ACL 信息。

@@ -311,6 +311,79 @@
 
 ---
 
+### K-33：5s confirm 弹窗不可豁免 + 允许按钮无快捷键 ✅ 已修复
+- **状态**：2026-05-28
+- **现象**：
+  1. 用户在 agent 自动跑 30 轮的 task 里被弹 20+ 次 `set_label` / `set_comment` / `add_function` 这种"几乎没风险"的写工具确认窗，每次都要等 5s 才能点；要么全程盯着键鼠，要么干脆豁出去全允许
+  2. 倒计时结束后想快速允许只能鼠标点按钮；ESC/Enter 又被绑成"拒绝"（安全默认），无法用键盘加速允许
+- **修复**：
+  - **配置驱动豁免**：`AppConfig::autoApproveTools` 从 `config.json` 的 `auto_approve_tools: [...]` 加载（小写化、长度 sanity）；启动时 `std::call_once` 合并入 `confirm_policy.h` 暴露的 `autoApproveTools()` 集
+  - **新建 `src/ai/tools/confirm_policy.{h,cpp}`**：暴露
+    - `confirmHardEnforced()` / `isConfirmHardEnforced(name)` — 5 项硬黑名单（`run_dbg_command` / `start_debug` / `attach_debug` / `stop_debug` / `patch_file`）
+    - `autoApproveTools()` / `isAutoApproved(name)` — 综合判定（先黑名单过滤再查配置）
+  - **`tool_registry::dispatch` 集成**：`needConfirm = isWrite && requiresUserConfirmation() && !isAutoApproved(name)`；豁免命中时仍写一条 `phase: "auto_approved"` 的 audit log
+  - **`ToolConfirmDialog` 加快捷键**：`Ctrl+Enter` / `Ctrl+Return` 双绑（QShortcut + lambda 显式检查 `allowButton_->isEnabled()`，避免倒计时未到时被触发）；按钮文案从「允许」→「允许 (Ctrl+Enter)」，ToolTip 提示「倒计时结束后生效」
+  - **`SafetyBrowserDialog` 加 Tab4**「Confirm 豁免 (K-33)」：列出所有 Write 工具 + 状态标签（"强制 confirm (黑名单)" / "✅ 已豁免 (用户配置)" / "默认弹 5s confirm"）；Tab5「如何在 config.json 配置」补充 `auto_approve_tools` 示例 + 骨架文件创建也加上空字段
+- **设计取舍**：
+  - **「宽松黑名单」策略**：除 5 项黄金黑名单外，所有 Write 工具都允许用户豁免——给重度用户最大灵活度。理由：黑名单覆盖了"会启动/杀进程 + 会落盘 + 命令逃生口"三类高风险，剩下的（set_breakpoint / patch_memory / assemble_at / set_register / set_page_protect / write_string ...）虽然能改进程状态但都是可观察可撤销的，由用户判断风险阈值
+  - **仍写 audit**：豁免 ≠ 不记录。`phase: "auto_approved"` 让事后复盘"我什么时候改过这个 dword"仍可 jq/grep。磁盘开销近零（rotating 4MB×10）
+  - **UI 只读 + config 编辑 + 重启生效**：与 K-32 白名单模式一致；用户不能在运行时切换豁免（避免 audit 解释不一致）
+  - **`Ctrl+Enter`** 选择理由：业界惯用「危险操作确认」组合键（Telegram / Slack / GitHub PR 都是）；不与 `Esc/Enter=deny` 冲突；倒计时未到时按了也无效（双重保险）
+- **影响**：
+  - 重度自动化 task 体验大幅改善（豁免 8 项常用低风险写工具后，30 轮 task 平均少弹 15+ 次）
+  - 倒计时一到 `Ctrl+Enter` 立即放行，键盘党不再被鼠标拖累
+  - 安全护栏不退步：5 项黄金黑名单 + K-30 内容护栏全部保留
+- **位置**：
+  - `src/ai/tools/confirm_policy.{h,cpp}` 新增
+  - `src/util/config.{h,cpp}`：`AppConfig::autoApproveTools` + `auto_approve_tools` 字段解析
+  - `src/ai/tools/tool_registry.cpp:164-200`：`needConfirm` 计算 + auto_approved audit
+  - `src/ui/tool_confirm_dialog.cpp:48-80,87-96`：QShortcut + 按钮文案/ToolTip
+  - `src/ui/safety_browser_dialog.{h,cpp}`：Tab4 新增 + Tab5 示例更新
+  - `src/CMakeLists.txt`：加 confirm_policy.{cpp,h}
+
+---
+
+### K-34：`malware-triage` 预设证据链薄弱、无量化、无 ATT&CK 映射 ✅ 已修复
+- **状态**：2026-05-28
+- **现象**：原版 `malware-triage` 预设虽已有 PHASE 0 verdict gate + 8 步 PHASE 1，但精度不足：
+  1. **API 命名启发式弱**：只看 import 表关键字，对动态 `GetProcAddress` 解析的样本完全瞎；良性程序大量误判（浏览器 / IM 都用 WinHttp+CreateMutex）
+  2. **零字符串挖掘**：硬编码 C2 URL / 持久化注册表键 / cmd&PowerShell 启动器 / base64 配置块等关键 IOC 没有任何工具能捞
+  3. **零 PE 头分析**：异常 TimeDateStamp / RWX 节 / 已知壳 marker（UPX/VMP/Themida）/ entropy 异常 / Authenticode 缺失等"教科书级"恶意特征拿不到
+  4. **判定不量化**：输出"该样本疑似恶意"无评分、无置信度、无权重；用户不知道凭什么这么判
+  5. **无 ATT&CK 标准化**：自由文本输出，与外部 threat intel 库无法交叉
+- **修复（中量级方案）**：
+  - **新增 2 个取证工具**（均 Read，纯只读）：
+    - `scan_strings(module? | start+size, min_len, encoding=both, only_suspicious)`：内存范围或整个模块映像扫描 ASCII + UTF-16LE 可打印字符串，按启发式分类标签 `c2_url` / `c2_ip` / `c2_onion` / `cmd_exec` / `registry_persist` / `path_env` / `mutex_marker` / `crypto` / `base64_blob`；硬上限 64 MB / 2000 条；分块 1MB 读 + 坏页降级到 4KB 探测；命中页 / 坏页计数附在结果里
+    - `analyze_pe_header(module?)`：用 vcpkg `pe-parse 2.1.1` 解析磁盘上的 PE 文件（image mapped 后 raw section 数据不可靠），输出 machine / subsystem / TimeDateStamp（含未来时间/epoch=0/>20 年异常）/ Entry Point（含 `ep_in_last_section` 检测）/ Image CheckSum / DLL Characteristics（NX/ASLR/CFG/HVCI/...）/ 节表（每节 Shannon entropy + RWX + 已知壳 marker 16 种：UPX/ASPack/VMProtect/Themida/Enigma/PECompact/MPRESS/Petite/NsPack/y0da/BOOM/MEW...）/ 资源表类型直方图（>100 KB 单条标 oversized）/ Data Directory 关键 6 项（Import/Export/Cert/Reloc/Debug/TLS）/ Authenticode 存在性（不验链）；输出量化 `risk_score 0-100` + `risk_tags` 数组
+  - **`malware-triage` system prompt 重写为 PHASE 0/1/2/3 四阶段**：
+    - PHASE 0：`analyze_pe_header` 一发判加壳 / 加密 / EP 在末节
+    - PHASE 1：`analyze_pe_header` + `get_module_imports`（按 INJECTION/C2/PERSIST/CRYPTO/AV-EVASION 五类聚合）+ `scan_strings only_suspicious=true`
+    - PHASE 2：原有行为面（PEB/线程/句柄/TCP/窗口/SEH）
+    - PHASE 3：**量化评分 rubric**——明确给 PE risk_score / 注入 import / C2 import / c2_url / cmd_exec / registry_persist / mutex_marker / HideFromDebugger / 活跃 C2 连接 / RWX 私有区每项的权重，封顶 100；分四档（0-19 benign / 20-44 suspicious / 45-69 likely-malicious / 70-100 highly-likely-malicious）
+  - **强制 MITRE ATT&CK 映射**：injection-imports + RWX → T1055 + 子技术；C2-imports → T1071；registry_persist → T1547.001；CreateService → T1543.003；反调试 → T1622；cmd/powershell → T1059.001/003；CryptEncrypt + FindFirstFile → T1486
+  - **输出格式标准化**：四段（结论 / 关键 IOC / 行为画像 / ATT&CK 矩阵 / 建议后续动作），每个 IOC 必须 cite tool.field 来源 + 权重 + ATT&CK ID
+  - **`maxIter` 25 → 30**：新增的两步静态深挖（PE + strings）让循环预算合理
+- **设计取舍**：
+  - **未引入 LIEF**：LIEF 体积 ~10MB + 编译 15-20 min + 一堆传递依赖；pe-parse 体积 500KB + 编译 30s 已能覆盖核心字段。Authenticode 仅检"存在性"——足以作为风险信号，链验证留给外部 sigcheck.exe / signtool
+  - **未引入 YARA**：方案锁定中量级，规则集维护成本与本项目"工具增强"定位不符；后续如有需求可单独开 K-37 集成 libyara
+  - **未引入动态采样**：保持取证预设严格只读 = 不污染样本（符合数字取证规范），动态行为采集职责划给 `unpack-helper` 等其他预设
+  - **PE 头从磁盘读而非内存**：image mapped 后 SizeOfRawData 不可信，entropy / Authenticode 全乱；磁盘读 = 拿到原始可靠数据，符合「样本指纹」需求
+- **影响**：
+  - 恶意代码取证 agent 输出从"自由叙述"升级到"量化评分 + 证据链 + ATT&CK 矩阵"三件套
+  - 工具总数 74 → **76**
+  - dp64 体积 11.79 MB → **14.53 MB**（+2.74 MB，pe-parse 静态链接代价）
+- **位置**：
+  - `src/ai/tools/scan_strings_tool.cpp` 新增 ~370 行
+  - `src/ai/tools/analyze_pe_header_tool.cpp` 新增 ~450 行（**注意 `<pe-parse/parse.h>` 必须在 `<Windows.h>` 前 include，否则 `IMAGE_SUBSYSTEM_*` 等同名宏冲突触发 C2059**）
+  - `src/ai/tools/builtin_tools.h`：暴露 `registerScanStringsTool` / `registerAnalyzePeHeaderTool`
+  - `src/ai/tools/tool_registry.cpp:89-92`：注册
+  - `src/ai/agent_preset.cpp:598-670`：malware-triage 重构
+  - `src/CMakeLists.txt`：加 2 个新源 + link `pe-parse::pe-parse`
+  - `CMakeLists.txt` 顶层：`find_package(pe-parse CONFIG REQUIRED)`
+  - `vcpkg.json`：加 `"pe-parse"` 依赖
+
+---
+
 
 ## ⚪ 未支持（设计取舍，不是 bug）
 

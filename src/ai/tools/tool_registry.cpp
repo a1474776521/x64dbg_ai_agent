@@ -5,6 +5,7 @@
 #include <chrono>
 
 #include "ai/tools/builtin_tools.h"
+#include "ai/tools/confirm_policy.h"
 #include "ai/tools/tool_context.h"
 #include "util/logging.h"
 
@@ -87,6 +88,8 @@ void ToolRegistry::registerBuiltinTools()
     registerPatchMiscTools(*this);
     registerAntiDebugTools(*this);
     registerForensicTools(*this);
+    registerScanStringsTool(*this);       // K-34: 内存字符串扫描 + IOC 自动分类
+    registerAnalyzePeHeaderTool(*this);   // K-34: PE 头深度分析 + 风险评分
     registerSehTool(*this);
     registerInjectionStackTools(*this);
     registerTraceErrorFuncTools(*this);
@@ -161,11 +164,32 @@ ToolResult ToolRegistry::dispatch(const std::string& name,
     // Read 工具：直接 invoke。
     // DbgControl / Write 工具：必须写 audit（开始 + 结束各一条），
     //                          Write 还要先弹 confirm（除非 requiresUserConfirmation()==false 显式豁免）。
+    // K-33：用户可在 config.json 配置 auto_approve_tools 跳过 confirm（仍写 audit，phase=auto_approved）；
+    //       但黑名单内的工具（confirmHardEnforced，如 run_dbg_command）即使在配置中也会被强制 confirm。
     const ToolCategory cat       = tool.category();
     const bool         isWrite   = (cat == ToolCategory::Write);
     const bool         isControl = (cat == ToolCategory::DbgControl);
     const bool         needAudit = isWrite || isControl;
-    const bool         needConfirm = isWrite && tool.requiresUserConfirmation();
+    const bool         autoApproved = isAutoApproved(name);
+    const bool         needConfirm = isWrite && tool.requiresUserConfirmation() && !autoApproved;
+
+    // K-33：被自动批准的写工具仍要写一条 audit
+    if (isWrite && autoApproved) {
+        try {
+            nlohmann::json a = {
+                {"ts",     std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::system_clock::now().time_since_epoch()).count()},
+                {"tool",   name},
+                {"category", toolCategoryName(cat)},
+                {"args",   args},
+                {"phase",  "auto_approved"},
+                {"sha",    ctx.targetSha},
+                {"session", ctx.sessionId},
+            };
+            auditLog()->info(a.dump());
+        } catch (...) {}
+        XAI_LOG_INFO("ToolRegistry::dispatch '{}': auto-approved by user config", name);
+    }
 
     if (needConfirm) {
         if (!ctx.confirmCallback) {

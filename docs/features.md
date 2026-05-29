@@ -285,9 +285,9 @@
 
 LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什么、再算什么、何时回答"。
 
-### 工具清单（K-32 后 74 个：39 个只读 + 6 个控制 + 29 个写）
+### 工具清单（K-34 后 **76 个**：41 个只读 + 6 个控制 + 29 个写）
 
-> 历史增量：S8=63 → K-28 新增 `patch_file` 即 64 → K-29 新增 `search_pattern` 即 65 → K-31 加入会话生命周期五件套 70 → K-31 工具页计数实际为 74（含 `start_debug` / `attach_debug` / `detach_debug` / `restart_debug` / `stop_debug` + `patch_file` + `search_pattern` + 既有 67）。所有写工具仍走 5s confirm + audit；K-30 后断点写工具新增「系统 API 高频符号黑名单」二级安全护栏。
+> 历史增量：S8=63 → K-28 新增 `patch_file` 即 64 → K-29 新增 `search_pattern` 即 65 → K-31 加入会话生命周期五件套 70 → K-31 工具页计数实际为 74（含 `start_debug` / `attach_debug` / `detach_debug` / `restart_debug` / `stop_debug` + `patch_file` + `search_pattern` + 既有 67） → **K-34 新增 `scan_strings` + `analyze_pe_header` 即 76**。所有写工具仍走 5s confirm + audit（K-33 用户可配置豁免）；K-30 后断点写工具新增「系统 API 高频符号黑名单」二级安全护栏。
 
 | 类别 | 工具 | 说明 |
 |---|---|---|
@@ -347,6 +347,8 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 | **S8-B 取证**（Read） | `enum_handles(type_filter?)` | 两阶段 `EnumHandles` + `GetHandleName`（typeBuf/nameBuf 各 512）；type_filter CI 子串过滤 |
 |  | `enum_windows()` | `WINDOW_INFO`：handle/parent/threadId/style/styleEx/wndProc/enabled/position/title[512]/class[512] |
 |  | `enum_tcp_connections()` | `TCPCONNECTIONINFO`：local/remote IPv4 + port + 状态字串 |
+| **K-34 取证增强**（Read） | `scan_strings(module? \| start+size, min_len, encoding, only_suspicious)` | ASCII + UTF-16LE 双扫；硬上限 64 MB / 2000 条；启发式 IOC 分类标签（`c2_url`/`c2_ip`/`c2_onion`/`cmd_exec`/`registry_persist`/`path_env`/`mutex_marker`/`crypto`/`base64_blob`）；坏页降级 4KB 探测；only_suspicious=true 时仅返回命中类别的串 |
+|  | `analyze_pe_header(module?)` | pe-parse 2.1 解析磁盘 PE 文件；输出 machine / subsystem / TimeDateStamp（含未来时间 / epoch=0 / >20 年异常）/ EP（含 `ep_in_last_section`）/ CheckSum / DLL Characteristics（NX/ASLR/CFG/...）/ 节表（每节 Shannon entropy + RWX + 16 种壳家族 marker：UPX/ASPack/VMProtect/Themida/Enigma/PECompact/...）/ 资源类型直方图（>100KB 标 oversized）/ 数据目录关键 6 项 / Authenticode 存在性；量化 `risk_score 0-100` + `risk_tags` 数组（malware-triage 预设核心证据） |
 | **S8-C SEH**（Read） | `get_seh_chain()` | `GetSEHChain` → `DBGSEHCHAIN`，records 需 `BridgeFree`；x86 走链表；x64 走 `if constexpr` 返回 total=0 并附 hint 引导 .pdata/RtlLookupFunctionEntry |
 | **S8-D 注入 + 栈**（Write+confirm；stack_peek 是 Read） | `remote_alloc(addr?, size)` | `Script::Memory::RemoteAlloc`；addr=0 让系统选；SDK 内固定 PAGE_EXECUTE_READWRITE；64MB 上限 |
 |  | `remote_free(addr)` | `Script::Memory::RemoteFree`；只接受 RemoteAlloc 返回的基址 |
@@ -374,19 +376,32 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 
 #### Write 工具 5s confirm（S3-C）
 
-- `ToolConfirmDialog`：模态 QDialog，5 秒倒计时；"允许"按钮初始 disabled，文本 `允许 (Ns)`，QTimer 每秒 -1，归零后启用并去掉计数
+- `ToolConfirmDialog`：模态 QDialog，5 秒倒计时；"允许"按钮初始 disabled，文本 `允许 (Ns)`，QTimer 每秒 -1，归零后启用并改文本为 `允许 (Ctrl+Enter)`
 - `denyButton_->setDefault(true)` → ESC/Enter **默认拒绝**；安全为先
+- **K-33 快捷键**：`Ctrl+Enter` / `Ctrl+Return` 双绑（QShortcut + lambda 显式检查 `allowButton_->isEnabled()`），倒计时未到时按了无效；选 Ctrl+Enter 是为不与 ESC/Enter=deny 冲突
 - 工具运行在 worker 线程时通过 `QMetaObject::invokeMethod(app, lambda, BlockingQueuedConnection)` 切到 GUI 线程并阻塞等返回
 - 无 `QApplication` 时安全 deny + 写 `phase=denied_no_ui`
 - 参数 JSON 在等宽字体 dark 主题块内展示，高级用户可审
 
-#### Write 工具审计日志（S3-B）
+#### Write 工具审计日志（S3-B + K-33 扩展）
 
 - 路径：`%APPDATA%\x64dbg-ai-plugin\logs\write_audit.log`
 - 独立 spdlog logger `x64dbg-ai-audit`；rotating 4 MB × 10；pattern `%v`（纯 JSON 一行一条）；`flush_on(info)` 保证即时落盘
 - JSON 字段：`ts(ms epoch) / tool / category / args / phase / sha / session` + 终态 `ok / error / data_snippet / elapsed_ms`
-- phase ∈ `{begin, end, confirmed, denied_by_user, denied_no_ui}`
+- phase ∈ `{begin, end, confirmed, denied_by_user, denied_no_ui, auto_approved}`（K-33 新增 `auto_approved`）
 - 便于 grep/jq 复盘 agent 行为：`type write_audit.log | jq 'select(.phase=="denied_by_user")'`
+
+#### K-33 用户可配置 Confirm 豁免
+
+- 用户在 `%APPDATA%\x64dbg-ai-plugin\config.json` 加 `auto_approve_tools: ["set_label", ...]` 让指定写工具跳过 5s 弹窗
+- **仍写 audit**：豁免不等于不留痕，phase 写 `auto_approved`
+- **黑名单不可豁免**（`src/ai/tools/confirm_policy.h::confirmHardEnforced`）：
+  - `run_dbg_command`（命令逃生口）
+  - `start_debug` / `attach_debug` / `stop_debug`（会话生命周期，启动/接管/杀进程）
+  - `patch_file`（落盘补丁不可撤销）
+  - 即使写进 `auto_approve_tools` 也会被 `isAutoApproved()` 强制 confirm
+- **加载模型**：`std::once_flag` 启动合并，修改 config 必须重启插件——与 K-32 白名单同模式，避免运行时漂移让 audit 解释不一致
+- **UI 入口**：`SafetyBrowserDialog` 新增 Tab4「Confirm 豁免 (K-33)」列出全部 Write 工具的状态（强制 / 已豁免 / 默认）；Tab5「如何配置」给出含 `auto_approve_tools` 的完整 JSON 示例
 
 #### 二级安全护栏（K-30 / K-32）
 

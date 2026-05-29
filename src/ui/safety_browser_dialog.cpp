@@ -2,6 +2,8 @@
 #include "ui/safety_browser_dialog.h"
 
 #include "ai/tools/bp_safety.h"
+#include "ai/tools/confirm_policy.h"
+#include "ai/tools/tool_registry.h"
 #include "util/config.h"
 #include "util/paths.h"
 
@@ -126,18 +128,100 @@ QWidget* makeSearchableList(const std::vector<std::string>& items,
 SafetyBrowserDialog::SafetyBrowserDialog(QWidget* parent, InitialTab initial)
     : QDialog(parent)
 {
+    setObjectName(QStringLiteral("x64aiSafetyBrowser"));
     setWindowTitle(QStringLiteral("安全护栏 - 白名单 / 黑名单一览"));
     resize(880, 620);
+
+    // Dark QSS（限定在本对话框 objectName 子树，不污染 x64dbg 其他窗口）。
+    // 修复：之前 QTableWidget header / cell 在系统浅色 palette 下出现"白底灰字"看不清。
+    setStyleSheet(QStringLiteral(R"(
+        #x64aiSafetyBrowser { background:#202225; color:#E6E8EB; }
+        #x64aiSafetyBrowser QLabel { color:#E6E8EB; }
+        #x64aiSafetyBrowser QTabWidget::pane {
+            background:#202225; border:1px solid #3A3D42; top:-1px;
+        }
+        #x64aiSafetyBrowser QTabBar::tab {
+            background:#2A2C30; color:#B7C0CC; padding:6px 14px;
+            border:1px solid #3A3D42; border-bottom:none;
+            border-top-left-radius:3px; border-top-right-radius:3px;
+        }
+        #x64aiSafetyBrowser QTabBar::tab:selected {
+            background:#202225; color:#E6E8EB;
+        }
+        #x64aiSafetyBrowser QTabBar::tab:hover { background:#34373C; }
+
+        #x64aiSafetyBrowser QLineEdit, #x64aiSafetyBrowser QPlainTextEdit {
+            background:#1B1D20; color:#E6E8EB;
+            border:1px solid #3A3D42; border-radius:3px; padding:4px 6px;
+            selection-background-color:#3B82F6; selection-color:#FFFFFF;
+        }
+        #x64aiSafetyBrowser QPlainTextEdit { padding:6px; }
+
+        #x64aiSafetyBrowser QPushButton {
+            background:#2D2F33; color:#E6E8EB;
+            border:1px solid #3A3D42; border-radius:3px; padding:5px 12px;
+        }
+        #x64aiSafetyBrowser QPushButton:hover { background:#3A3D42; }
+        #x64aiSafetyBrowser QPushButton:pressed { background:#1F2125; }
+        #x64aiSafetyBrowser QPushButton:default { border:1px solid #3B82F6; }
+
+        /* 关键修复：表头 + 表格内容统一 dark */
+        #x64aiSafetyBrowser QHeaderView::section {
+            background:#2D2F33; color:#E6E8EB;
+            border:none; border-right:1px solid #3A3D42; border-bottom:1px solid #3A3D42;
+            padding:6px 8px; font-weight:600;
+        }
+        #x64aiSafetyBrowser QHeaderView { background:#2D2F33; }
+        #x64aiSafetyBrowser QTableCornerButton::section {
+            background:#2D2F33; border:1px solid #3A3D42;
+        }
+        #x64aiSafetyBrowser QTableView, #x64aiSafetyBrowser QTableWidget {
+            background:#1B1D20; color:#E6E8EB;
+            alternate-background-color:#23262A;
+            gridline-color:#33363B;
+            selection-background-color:#3B82F6; selection-color:#FFFFFF;
+            border:1px solid #3A3D42;
+        }
+        #x64aiSafetyBrowser QTableView::item, #x64aiSafetyBrowser QTableWidget::item {
+            color:#E6E8EB; padding:3px 6px;
+        }
+        #x64aiSafetyBrowser QTableView::item:selected,
+        #x64aiSafetyBrowser QTableWidget::item:selected {
+            background:#3B82F6; color:#FFFFFF;
+        }
+
+        /* 滚动条 */
+        #x64aiSafetyBrowser QScrollBar:vertical {
+            background:#202225; width:12px; margin:0;
+        }
+        #x64aiSafetyBrowser QScrollBar::handle:vertical {
+            background:#3A3D42; min-height:24px; border-radius:3px;
+        }
+        #x64aiSafetyBrowser QScrollBar::handle:vertical:hover { background:#4A4D52; }
+        #x64aiSafetyBrowser QScrollBar::add-line:vertical,
+        #x64aiSafetyBrowser QScrollBar::sub-line:vertical { height:0; }
+        #x64aiSafetyBrowser QScrollBar:horizontal {
+            background:#202225; height:12px; margin:0;
+        }
+        #x64aiSafetyBrowser QScrollBar::handle:horizontal {
+            background:#3A3D42; min-width:24px; border-radius:3px;
+        }
+        #x64aiSafetyBrowser QScrollBar::handle:horizontal:hover { background:#4A4D52; }
+        #x64aiSafetyBrowser QScrollBar::add-line:horizontal,
+        #x64aiSafetyBrowser QScrollBar::sub-line:horizontal { width:0; }
+    )"));
+
     buildUi(initial);
 }
 
 void SafetyBrowserDialog::buildUi(InitialTab initial)
 {
     tabs_ = new QTabWidget(this);
-    tabs_->addTab(buildWhitelistTab(),  QStringLiteral("run_dbg_command 白名单"));
-    tabs_->addTab(buildSysModulesTab(), QStringLiteral("系统模块黑名单 (K-30)"));
-    tabs_->addTab(buildHotApisTab(),    QStringLiteral("高频 API 黑名单 (K-30)"));
-    tabs_->addTab(buildHowToTab(),      QStringLiteral("如何在 config.json 配置"));
+    tabs_->addTab(buildWhitelistTab(),    QStringLiteral("run_dbg_command 白名单"));
+    tabs_->addTab(buildSysModulesTab(),   QStringLiteral("系统模块黑名单 (K-30)"));
+    tabs_->addTab(buildHotApisTab(),      QStringLiteral("高频 API 黑名单 (K-30)"));
+    tabs_->addTab(buildAutoApproveTab(),  QStringLiteral("Confirm 豁免 (K-33)"));
+    tabs_->addTab(buildHowToTab(),        QStringLiteral("如何在 config.json 配置"));
     tabs_->setCurrentIndex(int(initial));
 
     auto* bb = new QDialogButtonBox(QDialogButtonBox::Close, this);
@@ -211,6 +295,68 @@ QWidget* SafetyBrowserDialog::buildHotApisTab()
     return makeSearchableList(items, {}, QStringLiteral("API 符号名 (小写)"), note);
 }
 
+QWidget* SafetyBrowserDialog::buildAutoApproveTab()
+{
+    // 收集：黑名单（强制 confirm 永不豁免） + 当前用户配置生效的豁免集 + 所有写工具列表
+    const auto& hard       = confirmHardEnforced();
+    const auto& userAuto   = autoApproveTools();
+
+    // 拉取所有 Write 工具名，按"豁免状态"做来源标签
+    // 注意：ToolRegistry 没有暴露 ITool*，无法读 requiresUserConfirmation()；
+    // 直接列 ToolCategory::Write 的全集。少数 Write 工具其实不弹 confirm（如 patch_misc 内 4 个），
+    // 这些工具加进 auto_approve_tools 是 no-op，不影响安全语义。
+    std::vector<std::string> writeNames;
+    {
+        const auto& reg = ToolRegistry::instance();
+        for (const auto& ct : reg.listChatTools()) {
+            if (reg.categoryOf(ct.name) != ToolCategory::Write) continue;
+            writeNames.push_back(ct.name);
+        }
+        std::sort(writeNames.begin(), writeNames.end());
+    }
+
+    auto lower = [](std::string s){
+        for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+
+    std::vector<std::string> items;
+    std::vector<std::string> tags;
+    int hardCount = 0, autoCount = 0, normalCount = 0;
+    for (const auto& n : writeNames) {
+        const auto nl = lower(n);
+        items.push_back(n);
+        if (hard.count(nl)) {
+            tags.push_back("强制 confirm (黑名单 · 不可豁免)");
+            ++hardCount;
+        } else if (userAuto.count(nl)) {
+            tags.push_back("✅ 已豁免 (用户配置)");
+            ++autoCount;
+        } else {
+            tags.push_back("默认弹 5s confirm");
+            ++normalCount;
+        }
+    }
+
+    const QString note = QStringLiteral(
+        "<b>K-33</b>：用户可在 <code>config.json</code> 配置 <code>auto_approve_tools</code> 让指定写工具<b>跳过 5s 确认弹窗</b>。"
+        "豁免的工具<b>仍写 audit log</b>（phase=auto_approved）。<br/>"
+        "<br/>当前状态："
+        "<b>强制 confirm</b> <span style='color:#FF6B6B'>%1</span> 项 · "
+        "<b>✅ 已豁免</b> <span style='color:#7AC74F'>%2</span> 项 · "
+        "<b>默认弹窗</b> <span style='color:#B7C0CC'>%3</span> 项"
+        "<br/><br/><b>黑名单</b>（即使写进 auto_approve_tools 也无效，避免误关键护栏）："
+        "<code>%4</code>"
+        ).arg(hardCount).arg(autoCount).arg(normalCount)
+         .arg(QString::fromStdString([&]{
+             std::string s;
+             for (const auto& n : hard) { if (!s.empty()) s += ", "; s += n; }
+             return s;
+         }()));
+
+    return makeSearchableList(items, tags, QStringLiteral("写工具名"), note);
+}
+
 QWidget* SafetyBrowserDialog::buildHowToTab()
 {
     auto* w = new QWidget;
@@ -224,8 +370,12 @@ QWidget* SafetyBrowserDialog::buildHowToTab()
     const bool cfgExists = fs::exists(cfgPath);
 
     auto* head = new QLabel(QStringLiteral(
-        "<h3 style='margin:0'>如何追加 run_dbg_command 白名单</h3>"
-        "<p>编辑 <code>%1</code>（不存在则新建），加入字段 <code>extra_dbg_cmd_whitelist</code>：</p>")
+        "<h3 style='margin:0'>config.json 可配置字段</h3>"
+        "<p>编辑 <code>%1</code>（不存在则新建），加入以下字段：</p>"
+        "<ul>"
+        "<li><code>extra_dbg_cmd_whitelist</code>：追加 run_dbg_command 白名单（默认 13 项硬集，见 Tab1）</li>"
+        "<li><code>auto_approve_tools</code>：豁免指定写工具的 5s confirm 弹窗，K-33 新增（仍写 audit；黑名单工具不可豁免，见 Tab4）</li>"
+        "</ul>")
         .arg(cfgPathStr));
     head->setTextFormat(Qt::RichText);
     head->setWordWrap(true);
@@ -241,21 +391,33 @@ QWidget* SafetyBrowserDialog::buildHowToTab()
     "bcdll",
     "InitDebug",
     "StopDebug"
+  ],
+
+  "auto_approve_tools": [
+    "set_label",
+    "set_comment",
+    "add_function",
+    "remove_breakpoint",
+    "remove_hw_breakpoint",
+    "restore_patch",
+    "set_flag",
+    "set_conditional_bp"
   ]
 })json"));
     sample->setReadOnly(true);
     QFont mono(QStringLiteral("Consolas"));
     mono.setStyleHint(QFont::Monospace);
     sample->setFont(mono);
-    sample->setMaximumHeight(180);
+    sample->setMaximumHeight(280);
     lay->addWidget(sample);
 
     auto* notes = new QLabel(QStringLiteral(
         "<ul>"
-        "<li>命令名按 x64dbg 命令首 token，大小写不敏感（内部统一转小写）。</li>"
-        "<li><b>修改后必须重启 x64dbg</b>，白名单合并集只在插件启动时构建一次。</li>"
-        "<li>只能追加，不能删除默认集（默认集见第一个标签页）。</li>"
-        "<li>用户追加的命令同样要 5s 倒计时确认（与所有 Write 类工具一致），不会绕过 confirm。</li>"
+        "<li>白名单命令名按 x64dbg 命令首 token，大小写不敏感（内部统一转小写）。</li>"
+        "<li>豁免工具名按 ITool::name()，与工具列表展示一致，大小写不敏感。</li>"
+        "<li><b>修改后必须重启 x64dbg</b>，合并集只在插件启动时构建一次。</li>"
+        "<li>白名单只能追加不能删除默认集；豁免列表的黑名单同样不可绕过（见 Tab1 / Tab4）。</li>"
+        "<li>用户追加的命令仍要 5s 倒计时确认；豁免列表才会跳过弹窗。</li>"
         "<li>追加危险命令前请确认它在被调试进程上下文执行不会卡死系统（参考 K-30 名单）。</li>"
         "</ul>"
         "<p style='color:#F2C84B'>已知配置文件路径：<br/><code>%1</code><br/>状态：%2</p>")
@@ -298,7 +460,8 @@ void SafetyBrowserDialog::onOpenConfigJson()
         std::ofstream ofs(cfgPath);
         if (ofs) {
             ofs << "{\n"
-                   "  \"extra_dbg_cmd_whitelist\": []\n"
+                   "  \"extra_dbg_cmd_whitelist\": [],\n"
+                   "  \"auto_approve_tools\": []\n"
                    "}\n";
         }
     }

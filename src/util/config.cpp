@@ -113,6 +113,21 @@ void Config::loadLocked()
                      data_.extraDbgCmdWhitelist.size());
     }
 
+    // K-33：auto_approve_tools 自动批准列表（仍写 audit）
+    // 注：confirm_policy.cpp 在 isAutoApproved() 中再做一次黑名单过滤——这里只做基本清洗。
+    if (j.contains("auto_approve_tools") && j["auto_approve_tools"].is_array()) {
+        data_.autoApproveTools.clear();
+        for (const auto& v : j["auto_approve_tools"]) {
+            if (!v.is_string()) continue;
+            std::string s = v.get<std::string>();
+            for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (s.empty() || s.size() > 64) continue;
+            data_.autoApproveTools.push_back(std::move(s));
+        }
+        XAI_LOG_INFO("config: auto_approve_tools loaded ({} entries)",
+                     data_.autoApproveTools.size());
+    }
+
     XAI_LOG_INFO("config loaded: provider={}, copilot.api_base={}, deepseek.api_base={}, default_model={}",
                  data_.provider, data_.copilot.apiBase, data_.deepseek.apiBase, data_.defaultModel);
 }

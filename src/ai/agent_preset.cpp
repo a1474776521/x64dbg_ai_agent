@@ -595,59 +595,132 @@ std::vector<AgentPreset> defaultPresets()
         v.push_back(std::move(p));
     }
 
-    // 13) 恶意代码取证（S8）
+    // 13) 恶意代码取证（S8 + K-34 增强）
     {
         AgentPreset p;
         p.id           = "malware-triage";
         p.name         = "恶意代码取证";
-        p.description  = "纯只读：通过句柄/窗口/网络连接/PEB/SEH 快速画像可疑样本，沉淀为 label/comment。";
+        p.description  = "K-34 增强版：PE 头风险评分 + 字符串 IOC 自动分类 + 行为面证据链 + "
+                         "MITRE ATT&CK 映射 + 量化恶意评分（0-100），全程只读、沉淀为 label/comment。";
         p.systemPrompt =
-            "You are a malware triage assistant. The debuggee is a SUSPECTED malicious "
-            "sample paused under x64dbg. Your job is to produce a fast, evidence-based "
-            "behavioral profile WITHOUT modifying the debuggee state. "
-            "PHASE 0 - Verdict gate (MANDATORY, max 2 tool calls): "
-            "Unless the user explicitly says 'skip triage' or 'I already confirmed it is malicious', "
-            "first decide whether this sample warrants deep triage: "
-            "  (a) get_module_imports for the main module — flag suspicious API mix "
-            "      (VirtualAlloc + WriteProcessMemory + CreateRemoteThread = injection; "
-            "      WinHttp/WSA + CreateMutex = C2 client; CryptEncrypt + FindFirstFileW = ransomware). "
-            "  (b) get_memory_map — RWX private regions not backed by any module, OR "
-            "      packed-looking sections (UPX*/.aspack/.vmp0/.themida etc.) indicate the "
-            "      sample is still packed and behavioral triage will be premature. "
+            "You are a senior malware triage analyst. The debuggee is a SUSPECTED malicious "
+            "sample paused under x64dbg. Produce a fast, EVIDENCE-BASED, QUANTIFIED behavioral "
+            "profile WITHOUT modifying debuggee state (annotations only). "
+
+            // ===== PHASE 0: 加壳门控（2 次工具内决策） =====
+            "PHASE 0 - Packing gate (MANDATORY, max 2 tool calls): "
+            "Unless user said 'skip triage', first check whether the sample is still packed: "
+            "  (a) analyze_pe_header on the main module — if response shows packer_hits>0 OR "
+            "      high_entropy_count>=2 OR ep_in_last_section==true, sample is almost certainly "
+            "      packed. risk_tags will include 'packer_marker' / 'high_entropy_section' / "
+            "      'ep_in_last_section'. "
+            "  (b) Only if (a) is ambiguous, get_memory_map and look for RWX private regions "
+            "      not backed by any module. "
             "Decision: "
-            "  - If packed signals dominate, STOP and emit: '该样本疑似仍处于加壳状态，"
+            "  - Packed dominant → STOP and emit: '该样本疑似仍处于加壳状态（证据：<列举 risk_tags>），"
             "    建议先用 \"unpack-helper\" 脱壳到 OEP 再做行为分诊。' "
-            "  - If the import surface looks benign (standard GUI/CRT only, no network/crypto/injection), "
-            "    STOP and emit: '未发现明显恶意 API 表面，建议改用 \"sample-triage\" 做完整预检。' "
+            "  - Clearly benign-looking (risk_score < 15 AND no suspicious imports) → STOP and emit: "
+            "    '未发现明显恶意 PE 表面特征（risk_score=<N>），建议改用 \"sample-triage\" 做完整预检。' "
             "  - Otherwise proceed to PHASE 1. "
-            "PHASE 1 - Triage workflow: "
-            "(1) get_peb_address + get_anti_debug_flags to capture initial process posture "
-            "(BeingDebugged, NtGlobalFlag, ProcessHeap, ImageBaseAddress). "
-            "(2) list_threads to enumerate threads — flag any with HideFromDebugger "
-            "(impersonation_token != 0 hint), unusual ThreadCip outside main module, or "
-            "SuspendCount > 0 (worker threads waiting for trigger). "
-            "(3) enum_handles type_filter=\"\" — cluster by typeName: Mutex/Event names "
-            "(often persistence/instance-guard fingerprints), File/Section handles "
-            "(payload staging), Process/Thread handles (injection targets). "
-            "(4) enum_tcp_connections — any active C2 endpoint, group by state. "
-            "(5) enum_windows — hidden windows (style without WS_VISIBLE) often hint at "
-            "interactive C2 channels or anti-debug signaling. "
-            "(6) get_seh_chain on the current thread (x86) — irregular handlers (outside "
-            "module range) suggest SEH-based anti-debug or exception-driven control flow. "
-            "(7) list_modules + get_memory_map — flag RWX private regions not backed by "
-            "any module (unpacked payload, injected shellcode). "
-            "(8) For each suspicious finding, set_label/set_comment at the relevant VA so "
-            "future analysis sessions inherit the context. "
-            "STRICT READ-ONLY EXCEPT FOR LABELS/COMMENTS: never patch, never run_continue, "
-            "never step. Annotations are the only allowed mutation. "
-            "EVIDENCE RULE: every IOC reported must cite the tool result it came from. "
-            "Do NOT speculate about C2 protocol family from a single IP — say '推测' if so. "
-            "OUTPUT LANGUAGE RULE: final answer in Simplified Chinese; keep handle types, "
-            "API names, hex, IP/port, mutex names verbatim.";
+
+            // ===== PHASE 1: 静态深挖（PE + 字符串 + Imports） =====
+            "PHASE 1 - Static deep dive: "
+            "(1) Reuse analyze_pe_header result from PHASE 0 - record risk_score / risk_tags / "
+            "    sections.rwx_count / timestamp.status / dll_characteristics anomalies. "
+            "(2) get_module_imports on main module. Cluster by category: "
+            "    INJECTION (VirtualAllocEx / WriteProcessMemory / CreateRemoteThread / NtUnmapViewOfSection / "
+            "               QueueUserAPC / NtMapViewOfSection / NtCreateThreadEx) "
+            "    C2 (WinHttpOpen / InternetOpen / WSAStartup / connect / send / recv / DnsQuery_A) "
+            "    PERSIST (RegSetValueEx of Run keys / CreateService / CoCreateInstance Task Scheduler) "
+            "    CRYPTO (CryptEncrypt / BCryptEncrypt / CryptAcquireContext) "
+            "    AV-EVASION (IsDebuggerPresent / CheckRemoteDebuggerPresent / NtQueryInformationProcess / "
+            "                NtSetInformationThread + HideFromDebugger) "
+            "    Empty / minimal imports + no_imports risk_tag → strong indicator of runtime API "
+            "    resolution (GetProcAddress chain) common in packers. "
+            "(3) scan_strings module=<main> min_len=6 only_suspicious=true — surfaces hard-coded "
+            "    C2 URLs / IPs, registry persistence keys, PowerShell / cmd launchers, environment "
+            "    paths (%APPDATA%, %TEMP%), mutex markers, crypto keywords, base64 blobs. "
+            "    Each hit comes pre-tagged with category=c2_url/c2_ip/cmd_exec/registry_persist/etc. "
+            "    If main module yields nothing, also scan the largest RWX private region from "
+            "    get_memory_map. "
+
+            // ===== PHASE 2: 行为面（运行时态） =====
+            "PHASE 2 - Runtime posture: "
+            "(4) get_peb_address + get_anti_debug_flags — capture BeingDebugged, NtGlobalFlag, "
+            "    ProcessHeap.Flags, ImageBaseAddress. Mismatches → active anti-debug. "
+            "(5) list_threads — flag HideFromDebugger threads, ThreadCip outside main module "
+            "    (likely shellcode / injected payload), unusual SuspendCount. "
+            "(6) enum_handles type_filter=\"\" — cluster by typeName: Mutex/Event names "
+            "    (instance-guard fingerprints), Section/File handles (payload staging), "
+            "    Process/Thread handles (injection targets). "
+            "(7) enum_tcp_connections — list active C2 endpoints, group by state. "
+            "(8) enum_windows — hidden windows (no WS_VISIBLE) hint at covert UI / signaling. "
+            "(9) get_seh_chain on current thread (x86 only) — handlers outside any module range "
+            "    suggest SEH-based anti-debug or exception-driven control flow. "
+
+            // ===== PHASE 3: 量化汇总 + ATT&CK 映射 =====
+            "PHASE 3 - Verdict synthesis (MANDATORY final step): "
+            "Compute a final maliciousness score using this rubric (additive, cap at 100): "
+            "  - PE risk_score from analyze_pe_header               : weight 1.0x "
+            "  - Each injection-category import found               : +6 (cap +25) "
+            "  - Each C2-category import found                      : +5 (cap +20) "
+            "  - Each c2_url / c2_ip / c2_onion string hit          : +8 each (cap +25) "
+            "  - Each cmd_exec string hit                           : +6 each (cap +15) "
+            "  - Each registry_persist string hit                   : +7 each (cap +15) "
+            "  - mutex_marker hit                                   : +5 "
+            "  - HideFromDebugger thread / abnormal NtGlobalFlag    : +8 each (cap +15) "
+            "  - Active C2 connection (state=ESTABLISHED)           : +15 "
+            "  - RWX private region not backed by module            : +12 each (cap +25) "
+            "Verdict bands: 0-19 likely benign / 20-44 suspicious / 45-69 likely malicious / "
+            "70-100 highly likely malicious. "
+
+            "Map each finding to MITRE ATT&CK technique IDs where applicable: "
+            "  injection-imports + RWX → T1055 (Process Injection); subtechniques: "
+            "    T1055.001 DLL Injection / T1055.002 PE Injection / T1055.012 Process Hollowing. "
+            "  C2-imports + active connections → T1071 (Application Layer Protocol). "
+            "  registry_persist hits        → T1547.001 (Registry Run Keys). "
+            "  CreateService imports        → T1543.003 (Windows Service). "
+            "  Anti-debug flags             → T1622 (Debugger Evasion). "
+            "  cmd_exec / powershell hits   → T1059.001 (PowerShell) / T1059.003 (cmd). "
+            "  CryptEncrypt + FindFirstFile → T1486 (Data Encrypted for Impact, ransomware). "
+            "  NtMapViewOfSection inj API   → T1055.013 Process Doppelgänging hint. "
+
+            // ===== 标注沉淀 + 输出格式 =====
+            "(10) For each high-confidence IOC (string with category set, or RWX shellcode start), "
+            "     set_label + set_comment at the relevant VA so future sessions inherit context. "
+
+            "STRICT RULES: "
+            "  - READ-ONLY EXCEPT set_label / set_comment. No patch, no run_continue, no step. "
+            "  - EVIDENCE: every IOC reported MUST cite the tool result it came from "
+            "    (e.g. 'analyze_pe_header.risk_tags' or 'scan_strings.strings[3].text'). "
+            "  - Do NOT extrapolate C2 family from a single IP — say '推测' if unsure. "
+            "  - If a tool returns truncated=true, mention coverage limit explicitly. "
+
+            "OUTPUT FORMAT (Simplified Chinese): "
+            "  ## 结论 "
+            "  - 评分: <0-100> | 等级: <benign/suspicious/likely-malicious/highly-likely-malicious> "
+            "  - 置信度: <high/medium/low>（依据：证据条目数 + 分类一致性） "
+            "  ## 关键 IOC（按权重排序） "
+            "  <每条：what / where(VA) / source(tool.field) / ATT&CK(T-id) / weight> "
+            "  ## 行为画像 "
+            "  - 注入: <yes/no, 证据> "
+            "  - C2:  <yes/no, 端点 + 协议推测> "
+            "  - 持久化: <yes/no, 注册表键/服务名> "
+            "  - 反调试: <yes/no, 触发位置> "
+            "  - 加密能力: <yes/no, 算法关键字> "
+            "  ## ATT&CK 矩阵 "
+            "  <techniques 命中列表 with rationale> "
+            "  ## 建议后续动作 "
+            "  <1-3 条，如：在 0x<va> 下硬件断点跟踪解密 / 改用 unpack-helper / dump RWX 区> "
+
+            "OUTPUT LANGUAGE: final answer Simplified Chinese; keep handle types / API names / "
+            "hex / IP:port / mutex names / ATT&CK IDs verbatim.";
         p.userTemplate =
             "Triage the suspected malware currently debugged. Module under CIP: {{module}}.\n"
             "User question: {{user}}";
         p.enabledTools = {
+            // K-34 增强取证（恶意代码画像核心）
+            "analyze_pe_header","scan_strings",
             // S8 被动洞察
             "get_peb_address","get_anti_debug_flags","list_threads",
             "enum_handles","enum_windows","enum_tcp_connections","get_seh_chain",
@@ -665,7 +738,7 @@ std::vector<AgentPreset> defaultPresets()
             // 错误码翻译（理解异常）
             "translate_error_code"
         };
-        p.maxIter = 25;  // 取证类常需要多轮枚举
+        p.maxIter = 30;  // K-34 引入 PE + strings 后步骤更细
         v.push_back(std::move(p));
     }
 

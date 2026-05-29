@@ -1,4 +1,4 @@
-# Agent 能力评估报告
+﻿# Agent 能力评估报告
 
 > 日期：2026-05-28
 > 评估对象：x64dbg-ai-plugin 内置 agent（`src/ai/agent_loop.cpp` + `src/ai/agent_worker.cpp` + `src/ai/tools/*`）

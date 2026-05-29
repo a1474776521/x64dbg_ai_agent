@@ -86,6 +86,12 @@ void registerAntiDebugTools(ToolRegistry& reg);
 // 全部 Read；enum_handles 支持 type_filter 子串过滤
 void registerForensicTools(ToolRegistry& reg);
 
+// 在 reg 中注册 K-34 增强取证工具（恶意代码画像）：
+//   scan_strings        - ASCII/UTF-16LE 双扫 + IOC 自动分类（C2/path/cmd/registry/...）
+//   analyze_pe_header   - PE 头深度分析 + 量化 risk_score 0-100 + risk_tags 数组
+void registerScanStringsTool(ToolRegistry& reg);
+void registerAnalyzePeHeaderTool(ToolRegistry& reg);
+
 // 在 reg 中注册 SEH 链查询工具（S8-C）：
 //   get_seh_chain (Read，x64 下返回空数组并附 hint 指向 .pdata/RtlLookupFunctionEntry)
 void registerSehTool(ToolRegistry& reg);

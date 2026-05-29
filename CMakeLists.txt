@@ -43,6 +43,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
+find_package(pe-parse CONFIG REQUIRED)
 
 include(PluginPackaging)
 

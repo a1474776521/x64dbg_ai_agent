@@ -24,10 +24,11 @@ class SafetyBrowserDialog : public QDialog {
     Q_OBJECT
 public:
     enum InitialTab {
-        TabWhitelist  = 0,
-        TabSysModules = 1,
-        TabHotApis    = 2,
-        TabHowTo      = 3,
+        TabWhitelist     = 0,
+        TabSysModules    = 1,
+        TabHotApis       = 2,
+        TabAutoApprove   = 3,
+        TabHowTo         = 4,
     };
 
     explicit SafetyBrowserDialog(QWidget* parent, InitialTab initial = TabWhitelist);
@@ -40,6 +41,7 @@ private:
     QWidget* buildWhitelistTab();
     QWidget* buildSysModulesTab();
     QWidget* buildHotApisTab();
+    QWidget* buildAutoApproveTab();
     QWidget* buildHowToTab();
 
     QTabWidget* tabs_ = nullptr;

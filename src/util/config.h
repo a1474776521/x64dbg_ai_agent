@@ -55,6 +55,13 @@ struct AppConfig {
     // 命令名按 x64dbg 命令首 token 写，大小写不敏感（内部统一转小写比较）。
     // 注意：这只能添加，不能从默认集移除（移除得改代码，避免误关键护栏）。
     std::vector<std::string> extraDbgCmdWhitelist;
+
+    // K-33：用户自定义【跳过 5s confirm 弹窗】的写工具列表。
+    // 默认所有 Write 类工具都弹窗；加入本列表的工具会被自动批准（仍写 audit log）。
+    // 黑名单内的工具（run_dbg_command / start_debug / attach_debug / stop_debug / patch_file）
+    // 即使加入也会被强制 confirm —— 详见 ai/tools/confirm_policy.h::confirmHardEnforced。
+    // 工具名小写、和 ITool::name() 完全匹配（如 "set_label"）。修改后需重启插件生效。
+    std::vector<std::string> autoApproveTools;
 };
 
 class Config {

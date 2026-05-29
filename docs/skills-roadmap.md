@@ -4,7 +4,7 @@
 > **每次完成一个 S 段后，更新本表的 ✅/❌ 列 + Done 行**。
 > 横向对照：[features.md](features.md) 是最终能力快照；本文件是规划+进度。
 
-最后更新：2026-05-29（**K-37 完成** = K-35 retry 误判修复（DbgControl 整体不 retry，修脱壳场景浪费 1-2 分钟）+ confirm 倒计时 5s→3s + `run_continue.timeout_ms` 上限 60s→300s。前置 K-36 = 并行 read + 上下文压缩。工具数仍 **76**）
+最后更新：2026-05-29（**K-38 完成** = K-36 上下文压缩 UTF-8 截断 bug 修复（中文/emoji 不再触发 nlohmann::json type_error.316）+ AgentLoop 加 sanitizeUtf8 防御层。前置 K-37 = K-35 retry 误判修复 + confirm 5s→3s + run_continue 上限 300s。工具数仍 **76**）
 
 ---
 
@@ -190,6 +190,7 @@
 | **K-35** | **AgentLoop 编排增强：tool retry（仅瞬时错误 + 仅非 Write，退避重试，默认 1 次）+ auto-RAG 注入（run 入口按首条问句 embed+searchSimilar 召回历史 chunks 注入 system，默认 top_k=4）；`config.json` 加 4 开关** | **0** | **0** | — | ✅（未 tag） |
 | **K-36** | **AgentLoop 编排增强：并行 read（一批全 Read 时 QtConcurrent 并发，上限 4，含非 Read 回退串行）+ 上下文压缩（超模型窗口 75% 折叠最老整轮为 system 摘要，整轮折叠保配对）；`config.json` 加 5 开关** | **0** | **0** | — | ✅（未 tag） |
 | **K-37** | **K-35 retry 误判修复：DbgControl 整体不 retry（`wait_for_event`/`step_*` 业务 timeout 不再被误重试浪费 1-2 分钟）+ confirm 倒计时 5s→3s + `run_continue.timeout_ms` 上限 60s→300s（unpack/trace 场景）** | **0** | **0** | — | ✅（未 tag） |
+| **K-38** | **K-36 上下文压缩 UTF-8 截断 bug 修复：`safeUtf8Truncate` 按字符边界截断（避免切断中文/emoji 多字节序列引发 `nlohmann::json type_error.316`）+ `sanitizeUtf8` 防御层（AgentLoop 在 provider 调用前对所有 message.content 兜底替换非法字节为 `?`）** | **0** | **0** | — | ✅（未 tag） |
 
 > 工具总数：S8=63 → K-28=64 → K-29=65 → K-31=70 → K-33=74 → 当前 **76**（K-34 +2；K-35 纯编排逻辑不增工具；详见 `docs/features.md §11 工具清单`）。
 

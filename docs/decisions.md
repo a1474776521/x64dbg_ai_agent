@@ -12,6 +12,32 @@
 
 ---
 
+## 2026-05-29 · K-38：UTF-8 截断 bug 修复 + 防御层位置选型
+
+**背景**：K-36 上下文压缩在中文会话（jx3clientx64 反外挂分析）下抛 `[json.exception.type_error.316] invalid UTF-8 byte at index 459: 0x2E`，整个 agent run 崩。
+
+**根因**：`compressOldestRound` 用 `body.substr(0, 300)` 按字节截断 `m.content`，切断 UTF-8 多字节字符序列，dump 时 nlohmann::json 抛 type_error.316（0x2E 是被截断字符的"本该是续接字节"的下一个 ASCII 字节）。
+
+**Fix 1 候选**（按字符边界截断）：唯一合理方案，无权衡。实现 `safeUtf8Truncate` 回退到合法首字节再判断是否完整。
+
+**Fix 2 防御层放哪**（多候选）：
+- **A. AgentLoop::run 统一 sanitize**：在 `creq.messages = req.messages` 后、`provider->streamChat()` 前过一遍
+- **B. 两个 provider client 各自 sanitize**：`copilot_chat_client.cpp` + `deepseek_chat_client.cpp` 在 `body.dump()` 前各加一遍
+- **C. 在 ChatRequest::messages setter 加**（侵入度大，破坏数据类纯洁）
+- **D. 不加防御层，只修根因**
+
+**选定 A**：
+- 一处统一，新增 provider 自动受益（项目近期还可能加 openai 兼容/anthropic）
+- 在 agent 边界过滤而不是序列化点过滤，语义更清晰（"喂给 LLM 之前先洗"）
+- 性能影响最小（按 message 数 O(N)，远小于 dump 的 O(payload)）
+- B 要改两处且未来新 provider 容易漏；C 破坏 POD；D 留一颗定时炸弹
+
+**Sanitize 策略**：非法字节替换为 `?` 而不是丢弃 —— 保留位置便于 debug，UI 也能看到"哪里有奇怪字节"
+
+**不修 `scan_strings`/工具结果**：本案的污染源唯一确认在压缩逻辑（`scan_strings` 走 `isAsciiPrintable` 过滤）；若将来工具结果泄漏非法字节，A 已兜住
+
+---
+
 ## 2026-05-29 · K-37：K-35 retry 误判修复（DbgControl 整体不 retry vs 错误文案反白名单）
 
 **背景**：2026-05-29 10:xx 用户真机会话 `unpack-helper` 跑 UPX，复盘 plugin.log 发现 K-35 的 retry 把 3 次 `wait_for_event` 业务 timeout 当作"瞬时错误"重试，每次再等同样长，共浪费约 90-150 秒。

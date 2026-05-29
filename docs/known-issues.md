@@ -492,6 +492,38 @@
 
 ---
 
+### K-38：K-36 上下文压缩按字节截断切坏 UTF-8 多字节序列，provider dump 抛 type_error.316 ✅ 已修复
+- **状态**：2026-05-29
+- **现象**：用户在 jx3clientx64（剑网三客户端，大量中文 PE 字符串）会话里跑反外挂相关 IOC 检测，AgentLoop iter#3 抛错：
+  `provider threw: [json.exception.type_error.316] invalid UTF-8 byte at index 459: 0x2E`
+  整个 agent run 中断，无法继续。
+- **触发时序**（来自 2026-05-29 11:47:57 plugin.log）：
+  1. iter#1 三个 `search_pattern` 并行
+  2. iter#2 三个 `scan_strings` 并行（每个返回 2000 条字符串）
+  3. iter#3 触发 K-36 上下文压缩 `est_tokens=88817 budget=48000`，折叠 3 轮为一条 system 摘要
+  4. 同一 iter#3 立刻 `provider error: [json.exception.type_error.316] invalid UTF-8 byte at index 459: 0x2E`
+- **根因**：`agent_loop.cpp::compressOldestRound` 第 220 行
+  ```cpp
+  if (body.size() > 300) body = body.substr(0, 300) + "...";
+  ```
+  `body` 来自 `m.content`，含 UTF-8 中文/emoji 多字节字符。`substr(0, 300)` 按**字节**截断会切断 UTF-8 序列：例如 298 字节是 `E5`、299 是 `A4`（"复"的前 2 字节），300 应该是 `8D` 但被切掉，拼上 `"..."` = `E5 A4 2E 2E 2E`。`nlohmann::json::dump()` 验证 UTF-8 时遇到 `E5 A4` 后期待续接字节（`10xxxxxx`），实际遇到 `0x2E`（句点首位为 0），抛 type_error.316。**0x2E 不是非法字节本身，而是"应该是续接字节但不是"的那个字节**。
+- **修复**：
+  - **K-38.1 `safeUtf8Truncate(s, maxBytes)`**：按 UTF-8 字符边界截断。从 maxBytes 处往前回退到首字节，然后判断该字符的预期续接字节数是否齐了：齐了完整保留、不齐整个砍掉。回退最多 3 字节（UTF-8 最长 4 字节）。`compressOldestRound` 改用 `safeUtf8Truncate(body, 300)`
+  - **K-38.2 `sanitizeUtf8(s)` 防御层**：在 `AgentLoop::run` 把 `req.messages` 拷贝给 `creq.messages` 后、`provider->streamChat()` 前，对所有 `message.content` 做一遍非法 UTF-8 替换为 `'?'`。即使将来其他路径（工具结果含 GBK 字节、用户粘贴非法字节、其它截断 bug）泄漏非法字节，dump() 前最后一道关也能挡住，避免整个 agent run 被 provider throw 炸掉。
+- **设计取舍**：
+  - **为什么不只在两个 provider 客户端 (`copilot_chat_client.cpp` / `deepseek_chat_client.cpp`) 各自加一遍 sanitize**：放在 `agent_loop.cpp` 一处统一更不易漏；新增 provider 也自动受益
+  - **为什么 sanitize 替换为 `?` 不是丢弃**：保留字节位置便于 debug；用户在 UI 也能直观看到"哪里有奇怪字节"
+  - **为什么不修 `scan_strings`/工具结果**：本次定位的 PE 字符串走 `isAsciiPrintable` 过滤（0x20-0x7E），原则上不会输出非 ASCII；污染源唯一确认在压缩逻辑。若将来发现工具结果泄漏非法字节，sanitizeUtf8 也已兜住
+  - **为什么不收紧 `scan_strings` max_items**：当前 6000 条/轮触发压缩是合理使用，问题不是数据多而是压缩 bug
+- **影响**：
+  - 中文 / emoji / 任何含多字节 UTF-8 字符的长会话不再被压缩 bug 炸掉
+  - 即便将来引入新的非法字节路径，provider 也不会 throw
+  - 工具数 / 体积不变；dp64 11.66MB / dp32 8.57MB
+- **位置**：
+  - `src/ai/agent_loop.cpp`：新增 `safeUtf8Truncate` / `sanitizeUtf8` 两个 inline 函数；`compressOldestRound` 改用 safe 截断；`run()` 在 `creq.messages` 赋值后加 sanitize 循环
+
+---
+
 
 ## ⚪ 未支持（设计取舍，不是 bug）
 

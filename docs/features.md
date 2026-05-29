@@ -431,6 +431,8 @@ ToolPolicy 是「**所有写都需 confirm + audit**」的横切护栏；K-30 �
   - `reasoning_content` 增量 → ReasoningBlock 折叠面板
   - `tool_calls` 增量按 `delta.tool_calls[index]` 分组累积 `id / name / arguments`
 - 本轮结束若 `tool_calls.empty()` → 完成；否则按序 `dispatch` 每个工具，结果 `role=tool, tool_call_id=...` 写回 `messages`，进入下一轮
+- **K-35 tool retry**：某次 `dispatch` 失败且属瞬时错误（`isTransientToolError`：timeout/connection/network/embedding failed/5xx/rate limit/ssl…）且工具**非 Write 类**时，按 `300ms*attempt` 退避自动重试（默认 1 次、上限 3）；Write 类（断点/dbg cmd/patch）永不重试避免重复副作用。`tool_retry_enabled` / `tool_retry_max`
+- **K-35 auto-RAG 注入**：run 入口（仅一次）按首条 user 消息 `embed` + `SessionStore::searchSimilar(top_k)` 召回历史分析 chunks，拼成 `system` 消息插到最后一条 user 之前；无 store / embed 失败 / 无结果静默跳过。`auto_rag_inject_enabled` / `auto_rag_top_k`（默认开、top_k=4）
 - 安全上限：`max_iter = 20`（预设可调，1–50）；每工具 64 KB 硬截断；写类工具本批未开放
 - 全部工具调用进 `plugin.log`
 

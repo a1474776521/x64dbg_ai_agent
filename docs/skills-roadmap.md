@@ -4,7 +4,7 @@
 > **每次完成一个 S 段后，更新本表的 ✅/❌ 列 + Done 行**。
 > 横向对照：[features.md](features.md) 是最终能力快照；本文件是规划+进度。
 
-最后更新：2026-05-28（**K-34 完成** = malware-triage 升级 = 新增 `scan_strings` + `analyze_pe_header` 两个取证工具 + Phase 0/1/2/3 量化评分 + ATT&CK 映射；工具数 74 → **76**）
+最后更新：2026-05-29（**K-35 完成** = AgentLoop 编排增强 = tool retry（仅瞬时错误 + 仅非 Write）+ auto-RAG 注入（run 入口召回历史 chunks）；纯编排逻辑，工具数仍 **76**。前置 K-34 = malware-triage 升级 + `scan_strings`/`analyze_pe_header`）
 
 ---
 
@@ -186,8 +186,10 @@
 | **K-31** | **会话生命周期五件套：`start_debug`/`attach_debug`/`detach_debug`/`restart_debug`/`stop_debug`（全 Write + 5s confirm + audit）** | **+5** | **0** | — | ✅（未 tag） |
 | **K-32** | **白/黑名单抽 `bp_safety.{h,cpp}` 公共模块 + 「安全护栏」只读 UI（`SafetyBrowserDialog` 4 tab）+ config.json 可追加 `extra_dbg_cmd_whitelist`** | **0** | **0** | — | ✅（未 tag） |
 | **K-33** | **用户可配置 5s confirm 豁免（`config.json::auto_approve_tools` + 5 项硬黑名单）+ ToolConfirmDialog 加 `Ctrl+Enter` 快捷键 + SafetyBrowserDialog 新增 Tab4「Confirm 豁免」** | **0** | **0** | — | ✅（未 tag） |
+| **K-34** | **malware-triage 升级：新增 `scan_strings`（IOC 分类）+ `analyze_pe_header`（pe-parse PE 头 + risk_score）两个取证工具 + 预设重构为 PHASE 0/1/2/3 量化评分 + ATT&CK 映射（maxIter 25→30）** | **+2** | **0** | — | ✅（未 tag） |
+| **K-35** | **AgentLoop 编排增强：tool retry（仅瞬时错误 + 仅非 Write，退避重试，默认 1 次）+ auto-RAG 注入（run 入口按首条问句 embed+searchSimilar 召回历史 chunks 注入 system，默认 top_k=4）；`config.json` 加 4 开关** | **0** | **0** | — | ✅（未 tag） |
 
-> 工具总数：S8=63 → K-28=64 → K-29=65 → K-31=70 → 当前 **74**（含 K-27 之前的 S9 增量；详见 `docs/features.md §11 工具清单`）。
+> 工具总数：S8=63 → K-28=64 → K-29=65 → K-31=70 → K-33=74 → 当前 **76**（K-34 +2；K-35 纯编排逻辑不增工具；详见 `docs/features.md §11 工具清单`）。
 
 ---
 

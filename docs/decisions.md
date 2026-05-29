@@ -12,6 +12,35 @@
 
 ---
 
+## 2026-05-29 · K-35：AgentLoop 编排增强首批选 tool retry + auto-RAG（缓做上下文压缩 / 并行 read）
+
+**背景**：`docs/agent-capability-assessment.md` 评估 agent 处 L2 末/L3 初，ROI 排序候选改进：tool retry / auto-RAG 注入 / 上下文压缩 / 并行 read / plan-execute。需选首批落地。
+
+**候选范围（按 ROI）**：
+- **tool retry**：dispatch 失败仅 warn 直接回吐 LLM。改动最小（单点），ROI 最高
+- **auto-RAG 注入**：rag_search 须 LLM 显式调，实测常不调。复用现有检索，ROI 高
+- **上下文压缩**：messages 无限增长到 maxTokens 截断。改动最大、风险最高
+- **并行 read**：tool_calls 严格串行。收益依赖"一批多 read"场景，优先级最低
+
+**选定**：本轮做 **retry + auto-RAG**；压缩 / 并行 read 缓做。
+- 两者改动局限在 `agent_loop.cpp` + `config.{h,cpp}`，零侵入 ToolResult / dispatch / 70+ 工具
+- 压缩涉及 token 估算 + 历史折叠摘要，风险最高，留作独立后续
+- 并行 read 需线程池 + 只读安全判定，收益场景有限，最后排
+
+**关键实现决策**：
+- **retry 放 AgentLoop 层不放 dispatch 层**：loop 能拿 `categoryOf` + `cancel`，且不必改 `ToolResult` 结构/dispatch 签名
+- **瞬时错误判定用文案白名单**（`isTransientToolError`）而非给 `ToolResult` 加 `retryable` 字段：零侵入，免改全部工具
+- **retry 仅非 Write + 仅瞬时**：Write 已确认副作用不可重复；参数/业务错误重试无意义
+- **auto-RAG 仅 run 入口注入一次**（非每轮）：避免重复 embedding 烧配额 + 重复刷 context；深挖仍靠 LLM 显式 rag_search
+- **两开关默认开**：用户明确选"都默认开"。注意——这与本项目以往"默认关、config 显式开"偏好相反；retry 用"仅瞬时 + 仅非 Write"严格收口以免掩盖真实错误
+
+**代价 / 复盘**：
+- 默认开 auto-RAG 会在每次 run 入口固定消耗 1 次 embedding 配额（即便用户没问历史相关问题）；若配额吃紧可 `auto_rag_inject_enabled=false`
+- retry 的瞬时错误判定是"文案匹配"启发式，可能漏判（错误文案不含白名单词）或误判（业务错误恰含 "timeout"）；风险被"仅非 Write + 上限"收口
+- 未做压缩 = 长会话仍会撞 maxTokens（见 N-05 token 预算）；属已知遗留，下一批 K 处理
+
+---
+
 ## 2026-05-28 · K-34：malware-triage 升级方案选型（否决「轻量 prompt-only」「重量 YARA+sandbox」「LIEF」）
 
 **背景**：原 `malware-triage` 预设证据链单薄（仅靠 import 表关键字 + 行为面 6 步），无量化、无 ATT&CK 标准化输出。用户希望"更准确判断被调试程序是否存在恶意代码"。

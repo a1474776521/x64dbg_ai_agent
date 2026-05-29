@@ -384,6 +384,38 @@
 
 ---
 
+### K-35：AgentLoop 单循环缺自愈与历史召回（tool retry + auto-RAG 注入） ✅ 已修复
+- **状态**：2026-05-29
+- **现象**（来自 `docs/agent-capability-assessment.md` 评估，agent 处 L2 末/L3 初）：
+  1. **无 tool retry**：`registry.dispatch` 一旦失败（ok=false），即便是 embedding 接口抖动 / HTTP 5xx / 连接超时这类瞬时错误，也直接把错误文案回吐给 LLM，浪费一整轮往返让模型"自己重试"，且模型未必会重试
+  2. **RAG 不自动注入**：历史分析虽已写入 SessionStore 的向量库，但 LLM 必须显式调 `rag_search` 才能召回；实测模型经常不调，导致跨轮 / 跨会话的已有结论被白白浪费（与 N-04 同源）
+- **修复（K-35 编排增强，两项小而稳）**：
+  - **tool retry**（`agent_loop.cpp` dispatch 处包一层）：
+    - 仅对**瞬时错误**重试 —— 错误文案命中白名单关键字（`timeout`/`connection`/`network`/`embedding failed`/`rate limit`/`503`/`502`/`504`/`500`/`service unavailable`/`reset by peer`/`broken pipe`/`ssl` 等），见 `isTransientToolError()`
+    - 仅对**非 Write 类**工具重试（`registry.categoryOf(name) != ToolCategory::Write`）：Write 已确认的副作用（断点/dbg cmd/patch）绝不能重复触发
+    - 退避：`300ms * attempt`（300/600/900）；每次重试前后查 `cancel`；若中途错误转为非瞬时则立即停止
+    - 默认开、最多 1 次（`tool_retry_enabled=true` / `tool_retry_max=1`，上限 3）
+  - **auto-RAG 注入**（`agent_loop.cpp` run 入口，仅注入一次）：
+    - 取首条 user 消息（>4000 字符截断）→ `EmbeddingClient::embed` → `SessionStore::searchSimilar(topK)` → 拼成一条 `system` 消息插到**最后一条 user 消息之前**
+    - 单条 chunk 文本 >1200 字符截断；明确标注"背景信息，依赖前需用 live 工具核实"
+    - 复用 `dynamic_context_tools.cpp` 里 `rag_search` 已验证的检索路径（同 embed + 同 searchSimilar）
+    - 无 SessionStore / embed 失败 / 无结果 → 静默跳过（不阻断 run）
+    - 默认开、top-K=4（`auto_rag_inject_enabled=true` / `auto_rag_top_k=4`，1-16）
+- **设计取舍**：
+  - retry 放 AgentLoop 层而非 dispatch 层：loop 能拿到 `categoryOf` + `cancel`，且不必污染 `ToolResult` 结构 / dispatch 签名
+  - 瞬时错误用**文案白名单**而非给 `ToolResult` 加 `retryable` 标志：零侵入，无需改 70+ 个工具
+  - auto-RAG 只在 run 入口注入一次（不是每轮）：避免重复 embedding 烧 GitHub Models 配额 + 重复刷 context；后续深挖仍靠 LLM 显式 `rag_search`
+  - **本次两个开关默认开**（用户明确选择"都默认开"）—— 与以往"默认关、config 显式开"的偏好不同；retry 已用"仅瞬时 + 仅非 Write"严格收口避免掩盖真实错误
+- **影响**：
+  - 缓解 **N-04**（导入/历史会话 RAG 召回）：首条问句相关的历史 chunks 现在会被自动注入；但仍只覆盖"首轮 + 当前 session store"
+  - 瞬时网络/接口抖动不再消耗整轮 LLM 往返
+  - 工具数 / 体积不变（纯 AgentLoop + config 逻辑改动，无新依赖）
+- **位置**：
+  - `src/ai/agent_loop.cpp`：`isTransientToolError()` / `buildAutoRagContext()` + run 入口注入 + dispatch retry 循环
+  - `src/util/config.{h,cpp}`：`toolRetryEnabled` / `toolRetryMax` / `autoRagInjectEnabled` / `autoRagTopK`（config.json 键 `tool_retry_enabled` / `tool_retry_max` / `auto_rag_inject_enabled` / `auto_rag_top_k`）
+
+---
+
 
 ## ⚪ 未支持（设计取舍，不是 bug）
 
@@ -400,10 +432,11 @@
 - 切到 DeepSeek 后打开一个旧的 Copilot 会话，再发消息会用当前 provider 发——可能错配模型
 - 缓解：modelBox 切换时会自动按当前 provider 重新拉 model 列表；如果用户没主动切回原 provider 容易踩
 
-### N-04：导入会话不携带 RAG chunks
+### N-04：导入会话不携带 RAG chunks（K-35 部分缓解）
 - M3.6 故意为之：避免污染当前项目 RAG 上下文
 - 副作用：导入的对话历史无法在新项目里被语义检索命中
 - 用户可在导入后手动重做关键反汇编 → 自动写新 chunks
+- **K-35 缓解**：auto-RAG 注入会在每次 run 入口按首条问句自动召回当前 session store 里的 chunks（默认开）；但仅"首轮 + 当前 store"，跨项目导入的历史仍不在范围内
 
 ### N-05：全局分析强制 token 预算确认
 - 任何"分析整个模块 / 全部函数"类操作都要求用户先确认估算的 token 数

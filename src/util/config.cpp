@@ -128,6 +128,20 @@ void Config::loadLocked()
                      data_.autoApproveTools.size());
     }
 
+    // K-35：agent 编排增强开关
+    readField(j, "tool_retry_enabled",      data_.toolRetryEnabled);
+    readField(j, "tool_retry_max",          data_.toolRetryMax);
+    readField(j, "auto_rag_inject_enabled", data_.autoRagInjectEnabled);
+    readField(j, "auto_rag_top_k",          data_.autoRagTopK);
+    // 范围钳制（防 config 写出离谱值导致刷接口/刷配额）
+    if (data_.toolRetryMax < 0) data_.toolRetryMax = 0;
+    if (data_.toolRetryMax > 3) data_.toolRetryMax = 3;
+    if (data_.autoRagTopK   < 1) data_.autoRagTopK  = 1;
+    if (data_.autoRagTopK   > 16) data_.autoRagTopK = 16;
+    XAI_LOG_INFO("config: K-35 tool_retry={}(max={}) auto_rag_inject={}(top_k={})",
+                 data_.toolRetryEnabled, data_.toolRetryMax,
+                 data_.autoRagInjectEnabled, data_.autoRagTopK);
+
     XAI_LOG_INFO("config loaded: provider={}, copilot.api_base={}, deepseek.api_base={}, default_model={}",
                  data_.provider, data_.copilot.apiBase, data_.deepseek.apiBase, data_.defaultModel);
 }

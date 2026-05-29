@@ -62,6 +62,24 @@ struct AppConfig {
     // 即使加入也会被强制 confirm —— 详见 ai/tools/confirm_policy.h::confirmHardEnforced。
     // 工具名小写、和 ITool::name() 完全匹配（如 "set_label"）。修改后需重启插件生效。
     std::vector<std::string> autoApproveTools;
+
+    // K-35：agent 编排增强开关 —— tool retry。
+    // 当某次 tool dispatch 失败（ok=false）且错误属于"瞬时/可恢复"类
+    // （网络/超时/HTTP 5xx/connection/embedding failed），AgentLoop 会自动退避重试。
+    // 仅对【非 Write 类】工具重试（Write 已确认的副作用不能重复触发）；
+    // 参数错误 / 校验失败 / 业务逻辑失败不重试（重试无意义）。
+    // toolRetryMax=0 等价于关闭。默认开启、最多重试 1 次。
+    bool toolRetryEnabled = true;
+    int  toolRetryMax     = 1;     // 额外重试次数（0=不重试）；上限 3
+
+    // K-35：agent 编排增强开关 —— auto-RAG 注入。
+    // 每次 agent run 开始前，用首条 user 消息做一次向量检索（embed + searchSimilar），
+    // 把 top-K 历史分析 chunks 作为一条 system 上下文消息注入对话，
+    // 免去 LLM 必须显式调 rag_search 才能拿到历史的问题。
+    // 需要当前 session 有 SessionStore 且 GitHub Models PAT 可用；否则静默跳过。
+    // 默认开启、top-K=4。
+    bool autoRagInjectEnabled = true;
+    int  autoRagTopK          = 4;  // 1-16
 };
 
 class Config {

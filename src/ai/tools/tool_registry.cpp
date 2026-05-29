@@ -93,6 +93,7 @@ void ToolRegistry::registerBuiltinTools()
     registerSehTool(*this);
     registerInjectionStackTools(*this);
     registerTraceErrorFuncTools(*this);
+    registerSystemTools(*this);           // K-39: fs_* + shell_* 系统侧工具
     XAI_LOG_INFO("ToolRegistry::registerBuiltinTools(): total {} tools", tools_.size());
 }
 

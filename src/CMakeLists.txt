@@ -69,6 +69,7 @@ set(PLUGIN_SOURCES
     ai/tools/seh_tool.cpp
     ai/tools/injection_stack_tools.cpp
     ai/tools/trace_error_func_tools.cpp
+    ai/tools/system_tools.cpp
 
     # debugger
     debugger/disasm_context.cpp
@@ -149,6 +150,7 @@ set(PLUGIN_SOURCES
     util/http_options.h
     util/encoding.cpp
     util/encoding.h
+    util/utf8_safe.h
 
     ${QRC_FILES}
 )

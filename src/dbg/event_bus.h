@@ -50,7 +50,14 @@ enum class DbgEvent : std::uint8_t {
     DebugStopped = 5,   // 预留
     ProjectStoreReady = 6, // S3：ProjectContext 后台线程装好 store 后广播（UI 刷新状态栏/会话列表）
                            // payload.raw = const std::string* (UTF-8 sha256Hex；handler 内须立刻拷贝)
-    _Count       = 7,
+    // K-39: shell_cmd / shell_pwsh 工具事件（高观测性）
+    // 所有 shell 事件：payload.raw = const std::string* (UTF-8 命令行；handler 内须立刻拷贝)
+    //                 payload.addr = pid（启动后），或 0（启动失败/未知）
+    //                 payload.seq  = bus 自动++
+    ShellStarted     = 7,  // shell 子进程刚启动
+    ShellFinished    = 8,  // shell 子进程正常退出（含非 0 退出码；含 stdout/stderr 已收完）
+    ShellTimeout     = 9,  // shell 子进程超时被 TerminateJobObject 杀
+    _Count       = 10,
 };
 
 struct DbgEventPayload {

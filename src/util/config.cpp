@@ -158,6 +158,64 @@ void Config::loadLocked()
                  data_.contextCompressEnabled, data_.contextCompressThresholdPct,
                  data_.contextCompressKeepRounds);
 
+    // K-39：system tools 配置
+    //
+    // fs_allowed_dirs：字符串数组，含 {plugin_workdir} / {plugin_temp} /
+    // {debuggee_dir} / {user_home} 等占位符。这里仅原样存进 vector；
+    // 占位符在 system_tools.cpp 路径校验时按当前 ToolContext 展开。
+    if (j.contains("fs_allowed_dirs") && j["fs_allowed_dirs"].is_array()) {
+        data_.fsAllowedDirs.clear();
+        for (const auto& v : j["fs_allowed_dirs"]) {
+            if (!v.is_string()) continue;
+            std::string s = v.get<std::string>();
+            if (s.empty() || s.size() > 1024) continue;
+            data_.fsAllowedDirs.push_back(std::move(s));
+        }
+        XAI_LOG_INFO("config: K-39 fs_allowed_dirs loaded ({} entries)",
+                     data_.fsAllowedDirs.size());
+    }
+    // 留空 → system_tools 内自动用默认集合 [{plugin_workdir}, {plugin_temp}]
+
+    readField(j, "fs_read_max_bytes_default",      data_.fsReadMaxBytesDefault);
+    readField(j, "fs_read_max_bytes_cap",          data_.fsReadMaxBytesCap);
+    readField(j, "fs_write_max_bytes_cap",         data_.fsWriteMaxBytesCap);
+    readField(j, "shell_timeout_ms_default",       data_.shellTimeoutMsDefault);
+    readField(j, "shell_timeout_ms_cap",           data_.shellTimeoutMsCap);
+    readField(j, "shell_stdout_max_bytes_default", data_.shellStdoutMaxBytesDefault);
+    readField(j, "shell_stdout_max_bytes_cap",     data_.shellStdoutMaxBytesCap);
+    readField(j, "shell_stderr_max_bytes_default", data_.shellStderrMaxBytesDefault);
+    readField(j, "shell_stderr_max_bytes_cap",     data_.shellStderrMaxBytesCap);
+    // 范围 clamp：防 config 写离谱值
+    if (data_.fsReadMaxBytesDefault < 1024)      data_.fsReadMaxBytesDefault = 1024;
+    if (data_.fsReadMaxBytesCap     < 1024)      data_.fsReadMaxBytesCap     = 1024;
+    if (data_.fsReadMaxBytesCap     > 67108864)  data_.fsReadMaxBytesCap     = 67108864;   // 64MB
+    if (data_.fsReadMaxBytesDefault > data_.fsReadMaxBytesCap)
+        data_.fsReadMaxBytesDefault = data_.fsReadMaxBytesCap;
+    if (data_.fsWriteMaxBytesCap    < 1024)      data_.fsWriteMaxBytesCap    = 1024;
+    if (data_.fsWriteMaxBytesCap    > 67108864)  data_.fsWriteMaxBytesCap    = 67108864;
+    if (data_.shellTimeoutMsDefault < 100)       data_.shellTimeoutMsDefault = 100;
+    if (data_.shellTimeoutMsCap     < 100)       data_.shellTimeoutMsCap     = 100;
+    if (data_.shellTimeoutMsCap     > 3600000)   data_.shellTimeoutMsCap     = 3600000;    // 1 hour 硬上限
+    if (data_.shellTimeoutMsDefault > data_.shellTimeoutMsCap)
+        data_.shellTimeoutMsDefault = data_.shellTimeoutMsCap;
+    if (data_.shellStdoutMaxBytesDefault < 1024) data_.shellStdoutMaxBytesDefault = 1024;
+    if (data_.shellStdoutMaxBytesCap     < 1024) data_.shellStdoutMaxBytesCap     = 1024;
+    if (data_.shellStdoutMaxBytesCap     > 16777216) data_.shellStdoutMaxBytesCap = 16777216;  // 16MB
+    if (data_.shellStdoutMaxBytesDefault > data_.shellStdoutMaxBytesCap)
+        data_.shellStdoutMaxBytesDefault = data_.shellStdoutMaxBytesCap;
+    if (data_.shellStderrMaxBytesDefault < 1024) data_.shellStderrMaxBytesDefault = 1024;
+    if (data_.shellStderrMaxBytesCap     < 1024) data_.shellStderrMaxBytesCap     = 1024;
+    if (data_.shellStderrMaxBytesCap     > 16777216) data_.shellStderrMaxBytesCap = 16777216;
+    if (data_.shellStderrMaxBytesDefault > data_.shellStderrMaxBytesCap)
+        data_.shellStderrMaxBytesDefault = data_.shellStderrMaxBytesCap;
+    XAI_LOG_INFO("config: K-39 fs_read_max={}/{} fs_write_cap={} shell_timeout={}/{}ms "
+                 "shell_stdout={}/{} shell_stderr={}/{}",
+                 data_.fsReadMaxBytesDefault, data_.fsReadMaxBytesCap,
+                 data_.fsWriteMaxBytesCap,
+                 data_.shellTimeoutMsDefault, data_.shellTimeoutMsCap,
+                 data_.shellStdoutMaxBytesDefault, data_.shellStdoutMaxBytesCap,
+                 data_.shellStderrMaxBytesDefault, data_.shellStderrMaxBytesCap);
+
     XAI_LOG_INFO("config loaded: provider={}, copilot.api_base={}, deepseek.api_base={}, default_model={}",
                  data_.provider, data_.copilot.apiBase, data_.deepseek.apiBase, data_.defaultModel);
 }

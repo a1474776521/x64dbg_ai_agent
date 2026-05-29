@@ -12,6 +12,73 @@
 
 ---
 
+## 2026-05-29 · K-39：系统侧 5 工具（fs_read/write/create + shell_cmd/shell_pwsh）安全模型五连选
+
+**背景**：Agent 当前 76 工具全围绕 x64dbg SDK，缺通用"读项目源码 / 写报告 / 跑外部脚本"能力。用户需求是让 LLM 能：(1) 读样本附带的中文 README/反外挂技术文档；(2) 把分析结论写成 .md 报告；(3) 跑临时 PowerShell 取系统信息辅助分析（比如 `Get-Process` 看 x64dbg 自身环境）。
+
+**Q1 路径白名单怎么定**（多选 A/B/C）：
+- A. 配置白名单 + 占位符（`{plugin_workdir}` / `{plugin_temp}` / `{debuggee_dir}` / `{user_home}`），默认含前 3 个
+- B. 全盘开放，靠 confirm 兜底
+- C. 仅 `pluginRootDir()` 一个，不可改
+
+**选 A**：B 风险过高（LLM 写错盘符可以毁 C:\Windows），C 太死（分析样本时 LLM 要 `fs_read_file({debuggee_dir}/notes.txt` 看不到）。占位符是关键 ergonomic（LLM 不需要知道用户具体 APPDATA 路径，少幻觉）。`{debuggee_dir}` 进默认白名单是因为 90% 用例是分析样本目录里的伴随文件。
+
+**Q2 Shell 工具开不开**（A 全开/B 命令白名单/C 不做）：
+- A. 全开放命令字符串，强 confirm 兜底，加入 `confirmHardEnforced` 永不豁免
+- B. 维护命令首 token 白名单（类似 `run_dbg_command` 的 15 token 模式）
+- C. 干脆不做
+
+**选 A**：B 没有意义——`shell` 的价值就在 LLM 能组合 `Get-Process | Where-Object | Select-Object`，限首 token 就退化成"只能跑几个固定查询"。C 太弱。A 的风险用三道墙挡住：(i) `hardEnforced` 黑名单——auto-approve 模式下也强 confirm；(ii) JobObject KILL_ON_JOB_CLOSE 防进程逃逸；(iii) timeout 默认 30s cap 300s 防卡死。
+
+**Q3 cmd 和 pwsh 合一个还是分开**（A 合并 / B 分两个 / C 只做 pwsh）：
+- A. `shell` 单工具加 `shell=cmd|pwsh` 参数
+- B. `shell_cmd` + `shell_pwsh` 两独立工具
+- C. 只 pwsh
+
+**选 B**：A 增加 LLM 选错可能（`Get-Process` 喂进 cmd 直接 not recognized）。C 排除掉历史脚本/批处理用例（很多 PoC 是 cmd .bat）。分两个工具后 description 各自专一，LLM 选择路径短；audit log 区分也更干净。
+
+**Q4 cwd 怎么处理**（A 固定 plugin_workdir / B 参数化但白名单内 / C 任意）：
+- A. 强制 cwd = `{plugin_workdir}`
+- B. 参数 `cwd?` 必须落在 `fs_allowed_dirs` 内
+- C. 任意，含未在白名单的
+
+**选 B**：A 太死（分析样本时 `cwd={debuggee_dir}` 是合理用例）。C 等于绕过路径白名单——LLM 可以 cd 到任意盘再 `type` 文件。B 复用同一白名单，攻击面与 fs_* 工具一致。
+
+**Q5 配置/事件量化**（默认 + cap 双层 / 单一固定 / 全部 LLM 自由）：
+- A. default + cap：默认值 LLM 不传时用，LLM 传值时 clamp 到 cap
+- B. 单一固定（30s / 256 KB），LLM 不可改
+- C. LLM 全自由
+
+**选 A** + 加 EventBus 事件（`ShellStarted=7 / ShellFinished=8 / ShellTimeout=9`）：
+- A 提供"惯常情况开箱即用 + 异常情况 LLM 可调"的双轨；cap 防 LLM 写 timeout_ms=999999999
+- 事件让 UI 能显示 shell 卡片实时状态（与 ToolCallCard 解耦，shell 出错时不止工具卡片红，还能弹通知）
+- payload.raw = 完整命令行（UTF-8），payload.addr = pid；为将来 cmd_hash 留扩展位
+
+**fs 子选项细节**：
+- `fs_write_file.overwrite_existing` 默认 `true`（Q1=b 选择）——写报告场景默认会反复迭代，false 反人类；想要"仅新建"语义直接用 `fs_create_file`
+- `fs_read_file` 仅文本（utf-8 / gbk / auto）不支持二进制 base64（Q2=a）——二进制读写应该走 `read_memory`/`patch_memory` 这套 dbg 工具，不混淆边界
+- auto 编码：先 BOM 探测；无 BOM 严格 UTF-8 解码，失败 fallback GBK（覆盖 zh-CN Windows 99% 文本文件）
+
+**路径校验细节**：
+- 拒绝原始 `..`（不解析符号链接，直接字符串扫描）
+- 拒绝 UNC 设备命名空间 `\\?\` / `\\.\`（绕过白名单的经典路径）
+- 拒绝 reparse point（防止白名单内一个 junction 指向 C:\Windows）
+- 拒绝 Win32 保留设备名（`NUL` / `CON` / `PRN` / `AUX` / `COM1-9` / `LPT1-9`），含带扩展名形式
+- 前缀匹配大小写不敏感（Windows 文件系统语义一致）
+
+**UTF-8 helper 抽公共**：K-38 在 `agent_loop.cpp` 内联实现了 `safeUtf8Truncate`/`sanitizeUtf8`，K-39 shell 解 stdout 也需要 sanitize（CP936 解失败/截断/混 UTF-8 都可能产残字节）。抽到 `src/util/utf8_safe.h` namespace `x64ai::util`，agent_loop 改 include + `using`。
+
+**Shell 实现关键**：
+- `CreateProcessW` + `CREATE_SUSPENDED` + `AssignProcessToJobObject(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)` + `ResumeThread`：防 pwsh 起的子进程在父进程被 kill 后继续跑
+- stdin 立即关闭：避免子进程 `Read-Host` 卡死
+- stdout/stderr 各 anonymous pipe 各独立读线程：防一边 buffer 满阻塞另一边（经典管道死锁）
+- `cmd.exe /c` 用 `GetACP()`（zh-CN 上 = 936 GBK）解码 → sanitizeUtf8 兜底
+- pwsh 注入 `[Console]::OutputEncoding=[Text.UTF8Encoding]::new()` + `$OutputEncoding=...` 让输出直接 UTF-8（pwsh 7 默认行为已是 UTF-8，但兼容老 powershell 5.1 fallback 必须显式设）
+
+**范围控制**：本批仅做 5 个核心工具；曾考虑的 `fs_list_dir` / `fs_hash` / `fs_stat` / `proc_list` / `proc_kill` 等"调试常用辅助"列表已收齐，但暂不实现——避免 K-39 commit 膨胀到 2000 行（system_tools.cpp 已 ~900 行）。下批（K-40+）再按用户实际反馈决定要哪些。
+
+---
+
 ## 2026-05-29 · K-38：UTF-8 截断 bug 修复 + 防御层位置选型
 
 **背景**：K-36 上下文压缩在中文会话（jx3clientx64 反外挂分析）下抛 `[json.exception.type_error.316] invalid UTF-8 byte at index 459: 0x2E`，整个 agent run 崩。

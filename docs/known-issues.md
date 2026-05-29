@@ -521,6 +521,7 @@
   - 工具数 / 体积不变；dp64 11.66MB / dp32 8.57MB
 - **位置**：
   - `src/ai/agent_loop.cpp`：新增 `safeUtf8Truncate` / `sanitizeUtf8` 两个 inline 函数；`compressOldestRound` 改用 safe 截断；`run()` 在 `creq.messages` 赋值后加 sanitize 循环
+  - **K-39 衍生重构**：两个 helper 抽到 `src/util/utf8_safe.h` namespace `x64ai::util`，agent_loop.cpp 改 include + `using`；K-39 新加的 `shell_cmd`/`shell_pwsh` 解码 stdout 时复用同两个 helper（cmd 用 `GetACP()` 解 GBK 后 sanitize 兜底；pwsh 注入 UTF-8 输出后仍 sanitize 防截断）
 
 ---
 

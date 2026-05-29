@@ -285,9 +285,9 @@
 
 LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什么、再算什么、何时回答"。
 
-### 工具清单（K-34 后 **76 个**：41 个只读 + 6 个控制 + 29 个写）
+### 工具清单（K-39 后 **80 个**：42 个只读 + 6 个控制 + 32 个写）
 
-> 历史增量：S8=63 → K-28 新增 `patch_file` 即 64 → K-29 新增 `search_pattern` 即 65 → K-31 加入会话生命周期五件套 70 → K-31 工具页计数实际为 74（含 `start_debug` / `attach_debug` / `detach_debug` / `restart_debug` / `stop_debug` + `patch_file` + `search_pattern` + 既有 67） → **K-34 新增 `scan_strings` + `analyze_pe_header` 即 76**。所有写工具仍走 5s confirm + audit（K-33 用户可配置豁免）；K-30 后断点写工具新增「系统 API 高频符号黑名单」二级安全护栏。
+> 历史增量：S8=63 → K-28 新增 `patch_file` 即 64 → K-29 新增 `search_pattern` 即 65 → K-31 加入会话生命周期五件套 70 → K-31 工具页计数实际为 74（含 `start_debug` / `attach_debug` / `detach_debug` / `restart_debug` / `stop_debug` + `patch_file` + `search_pattern` + 既有 67） → **K-34 新增 `scan_strings` + `analyze_pe_header` 即 76** → **K-39 新增系统侧 `fs_read_file`/`fs_write_file`/`fs_create_file`/`shell_cmd`/`shell_pwsh` 即 80**。所有写工具仍走 3s confirm（K-37：5s→3s）+ audit（K-33 用户可配置豁免）；K-30 后断点写工具新增「系统 API 高频符号黑名单」二级安全护栏；K-39 起 `shell_cmd`/`shell_pwsh`/`fs_write_file`/`fs_create_file` 加入 `confirmHardEnforced` 黑名单，**永不**被 auto-approve 豁免。
 
 | 类别 | 工具 | 说明 |
 |---|---|---|
@@ -365,6 +365,11 @@ LLM 主导的多步推理。给 LLM 一组工具，让它自己决定"先看什�
 |  | `detach_debug()` | `DbgCmdExec("detach")`；不杀目标进程 |
 |  | `restart_debug()` | `DbgCmdExec("InitDebug,...")` 重启当前会话；保留命令行 / cwd |
 |  | `stop_debug()` | `DbgCmdExec("StopDebug")`；会杀目标进程（与 detach 区别）
+| **K-39 系统侧** group=`system`（fs_read 是 Read；其余 4 个 Write + 3s confirm + audit + **hardEnforced 永不豁免**） | `fs_read_file(path, encoding=auto\|utf-8\|gbk, max_bytes?)` | 文本读；`max_bytes` 默认 256 KB（`fs_read_max_bytes_default`），cap 4 MB（`fs_read_max_bytes_cap`）；超 cap 截尾并标 `truncated=true`；auto 时先 BOM 探测再尝试 UTF-8 严格解码失败 fallback GBK |
+|  | `fs_write_file(path, content, encoding=utf-8\|gbk, overwrite_existing=true)` | 覆盖写；默认 overwrite=true（Q1=b 选择）；内容大小 cap 4 MB（`fs_write_max_bytes_cap`）；自动 mkdir -p 父目录（仍受白名单约束）|
+|  | `fs_create_file(path, content?, encoding=utf-8\|gbk)` | 仅当文件不存在时创建；存在直接报错 `file already exists`；其余约束同 fs_write |
+|  | `shell_cmd(command, cwd?, timeout_ms?)` | `cmd.exe /c <command>`；cwd 必须落在 `fs_allowed_dirs` 内；JobObject + KILL_ON_JOB_CLOSE 防子进程逃跑；stdout/stderr 各 anonymous pipe 独立读线程；按 `GetACP()`（zh-CN=936）解码再 sanitizeUtf8 兜底；timeout default 30s / cap 300s；输出 default 256 KB / cap 4 MB |
+|  | `shell_pwsh(command, cwd?, timeout_ms?)` | 同上，但优先 `pwsh.exe`（PATH 查找），fallback `powershell.exe`；脚本头注入 `[Console]::OutputEncoding=[Text.UTF8Encoding]::new()` + `$OutputEncoding=...` 让结果按 UTF-8 直出，避免 GBK 二次解码乱码 |
 
 ### ToolPolicy 三档（S3）
 
@@ -436,6 +441,9 @@ ToolPolicy 是「**所有写都需 confirm + audit**」的横切护栏；K-30 �
 - **K-36 并行 read**：当一轮 tool_calls **全为 Read 类**（任一 DbgControl/Write 即整批回退串行）时，用 `QThreadPool` + `QtConcurrent` 并发 dispatch（上限 `parallel_read_max`，默认 4）；结果按原始下标收集，回调 + 写回 `messages` 仍在主线程按原序（保证 tool_call_id 配对）。retry 逻辑在并行分支内每个工具仍生效。`parallel_read_enabled` / `parallel_read_max`（默认开、上限 4）
   - 注：UI 一直把一轮多卡片一次性预创建成 pending（视觉像并行）；K-36 之前底层是串行 dispatch，K-36 后只读批次才真正并发
 - **K-36 上下文压缩**：每轮 streamChat 前按 `字符/4` 粗估累计 token，超过 `模型窗口 * 阈值%`（默认 75%）时反复折叠**最老整轮**（一条 assistant + 其全部 tool 消息 → 一条本地 system 摘要，不调 LLM）；开头 system + 末尾 `keep_rounds` 轮（默认 3）永不压缩。整轮折叠保证 assistant↔tool_call_id 配对不破。模型窗口表：deepseek 64K / gpt-4o·o-series 128K / claude 200K / 未知 32K。`context_compress_enabled` / `context_compress_threshold_pct` / `context_compress_keep_rounds`
+- **K-37 retry/confirm/timeout 三项收紧**：(1) `isToolRetryable` 增加 `cat != DbgControl` 判断，6 个 DbgControl 工具（run_continue / step_into / step_over / step_out / set_breakpoint / delete_breakpoint）从此不再 retry，避免一次单步指令被网络抖动放大成多次；(2) 写工具 confirm 倒计时 5s → 3s；(3) `run_continue` 单次等待 timeout cap 60s → 300s（仍受全局 `max_iter` 控制）
+- **K-38 UTF-8 截断 bug 修复**：`compressOldestRound` 用 `std::string::substr` 按字节切，命中中文/emoji 多字节序列尾巴时产生残缺字节，被 nlohmann::json dump 抛 `type_error.316: invalid UTF-8 byte 0xE2`，整轮回包丢失。修：新增 `safeUtf8Truncate`（向后退到完整码点边界）+ `sanitizeUtf8`（保留 ASCII + 完整多字节，残缺替换为 U+FFFD）；`run()` 在 `creq.messages` 赋值后再扫一遍兜底
+- **K-39 系统工具（5 个）**：在原 76 个 + Agent 体系外新增 group=`system` 工具组——`fs_read_file`（文本读，utf-8/gbk/auto，默认 256 KB，cap 4 MB）/ `fs_write_file`（覆盖写，默认 overwrite_existing=true）/ `fs_create_file`（仅新建）/ `shell_cmd`（cmd.exe /c，GetACP 解码）/ `shell_pwsh`（pwsh 优先 fallback powershell，注入 UTF-8 输出编码）。安全模型：(a) **路径白名单**`fs_allowed_dirs` 默认 `[{plugin_workdir}, {plugin_temp}, {debuggee_dir}]`，支持 `{plugin_workdir}` / `{plugin_temp}` / `{debuggee_dir}` / `{user_home}` 4 个占位符；拒绝原始 `..`、UNC `\\?\` / `\\.\`、reparse point、保留设备名（NUL/CON/PRN/AUX/COM1-9/LPT1-9），前缀匹配大小写不敏感；(b) Shell 用 CreateProcessW + JobObject `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 防子进程逃跑，stdin 关闭，stdout/stderr 各一条 anonymous pipe 由独立读线程喂；(c) 超时/输出大小全配置化（`shell_timeout_ms_default/cap` 默认 30s / cap 300s；`shell_stdout_max_bytes_default/cap` 256 KB / 4 MB）；(d) 4 写工具加入 `confirmHardEnforced`，**永不**被 auto-approve 豁免；(e) `EventBus::DbgEvent` 新增 `ShellStarted=7 / ShellFinished=8 / ShellTimeout=9` 三事件，payload.raw=完整命令行，payload.addr=pid（cmd_hash 待定）；(f) UTF-8 helper 抽到 `src/util/utf8_safe.h`，K-38 与 K-39 共享
 - 安全上限：`max_iter = 20`（预设可调，1–50）；每工具 64 KB 硬截断；写类工具本批未开放
 - 全部工具调用进 `plugin.log`
 

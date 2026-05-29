@@ -107,4 +107,12 @@ void registerInjectionStackTools(ToolRegistry& reg);
 //   add_function (Write+confirm，end 为最后一条指令起始 VA，不是 end+1)
 void registerTraceErrorFuncTools(ToolRegistry& reg);
 
+// 在 reg 中注册 K-39 系统侧工具（系统/文件/Shell）：
+//   fs_read_file (Read)
+//   fs_write_file / fs_create_file (Write+confirm)
+//   shell_cmd / shell_pwsh (Write+confirm，且 hardEnforced 永不豁免 auto-approve)
+// 全部受 fs_allowed_dirs 白名单约束；shell 走 cmd.exe 或 pwsh.exe，输出按编码解码后再 sanitizeUtf8 兜底；
+// 三类事件 ShellStarted/ShellFinished/ShellTimeout 通过 EventBus 广播
+void registerSystemTools(ToolRegistry& reg);
+
 }  // namespace x64ai

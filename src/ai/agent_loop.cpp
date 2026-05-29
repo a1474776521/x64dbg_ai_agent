@@ -10,6 +10,7 @@
 
 #include "util/config.h"
 #include "util/logging.h"
+#include "util/utf8_safe.h"  // K-38/K-39: safeUtf8Truncate / sanitizeUtf8
 
 #include <algorithm>
 #include <cctype>
@@ -158,95 +159,11 @@ std::size_t providerContextWindow(const std::string& modelRaw)
     return 32000;
 }
 
-// K-38: UTF-8 安全字节截断 —— 按 UTF-8 字符边界截断，避免切断多字节序列
-// 让 nlohmann::json 在 dump() 时抛 type_error.316 invalid UTF-8。
-// 算法：从 maxBytes 处往前回退到合法字符起始字节。
-//   ASCII 字节  (0xxxxxxx)        独立成字符
-//   续接字节    (10xxxxxx)        必须紧跟前导字节
-//   2-byte 头   (110xxxxx)        +1 续接
-//   3-byte 头   (1110xxxx)        +2 续接
-//   4-byte 头   (11110xxx)        +3 续接
-// 回退最多 3 字节（UTF-8 最长 4 字节）。
-inline std::string safeUtf8Truncate(const std::string& s, std::size_t maxBytes)
-{
-    if (s.size() <= maxBytes) return s;
-    std::size_t cut = maxBytes;
-    // 若 s[cut] 是续接字节，往前回退到首字节，再砍掉首字节（不完整 → 整个丢）
-    while (cut > 0 && (static_cast<unsigned char>(s[cut]) & 0xC0) == 0x80) {
-        --cut;
-    }
-    // 现在 s[cut] 是首字节或 ASCII。检查它的预期续接字节数是否齐了。
-    // 若不齐（被 maxBytes 切断），把这个首字节也砍掉。
-    if (cut < s.size()) {
-        unsigned char b = static_cast<unsigned char>(s[cut]);
-        std::size_t need = 0;
-        if ((b & 0x80) == 0)         need = 0;          // ASCII，本身完整
-        else if ((b & 0xE0) == 0xC0) need = 1;
-        else if ((b & 0xF0) == 0xE0) need = 2;
-        else if ((b & 0xF8) == 0xF0) need = 3;
-        else                          need = 0;          // 非法字节，原地切
-        // 若 cut+1+need 超出 maxBytes（即续接字节不齐），整字符砍掉
-        if (need > 0 && (cut + 1 + need) > maxBytes) {
-            // do nothing; cut 保持指向首字节即可（substr(0, cut) 把这个字符整个丢掉）
-        } else {
-            cut = cut + 1 + need;  // 这个字符完整保留
-        }
-    }
-    return s.substr(0, cut);
-}
-
-// K-38: UTF-8 兜底清洗 —— 把字符串中的非法 UTF-8 字节替换为 '?'。
-// 防御层：即使其它路径（工具结果含 GBK 字节等）泄漏非法字节进 message.content，
-// dump() 前最后一道关也能挡住，避免 provider 直接 throw。
-inline std::string sanitizeUtf8(const std::string& s)
-{
-    std::string out;
-    out.reserve(s.size());
-    std::size_t i = 0;
-    const std::size_t n = s.size();
-    while (i < n) {
-        unsigned char b = static_cast<unsigned char>(s[i]);
-        std::size_t need = 0;
-        if ((b & 0x80) == 0) {                 // 0xxxxxxx ASCII
-            out.push_back(s[i++]);
-            continue;
-        } else if ((b & 0xE0) == 0xC0) {
-            need = 1;
-            if (b < 0xC2) { out.push_back('?'); ++i; continue; }  // overlong
-        } else if ((b & 0xF0) == 0xE0) {
-            need = 2;
-        } else if ((b & 0xF8) == 0xF0) {
-            need = 3;
-            if (b > 0xF4) { out.push_back('?'); ++i; continue; }  // > U+10FFFF
-        } else {
-            // 续接字节（0x80-0xBF）孤立出现，或 0xF5-0xFF 非法首字节
-            out.push_back('?');
-            ++i;
-            continue;
-        }
-        // 检查 need 个续接字节
-        if (i + need >= n) {
-            // 末尾被截断
-            out.push_back('?');
-            ++i;
-            continue;
-        }
-        bool ok = true;
-        for (std::size_t k = 1; k <= need; ++k) {
-            unsigned char cb = static_cast<unsigned char>(s[i + k]);
-            if ((cb & 0xC0) != 0x80) { ok = false; break; }
-        }
-        if (!ok) {
-            out.push_back('?');
-            ++i;
-            continue;
-        }
-        // 合法 N 字节字符，整段拷过去
-        out.append(s, i, need + 1);
-        i += need + 1;
-    }
-    return out;
-}
+// K-38: UTF-8 安全函数（safeUtf8Truncate / sanitizeUtf8）
+// K-39: 已抽到 src/util/utf8_safe.h 以便 system_tools 等其它 TU 复用。
+// 本 TU 通过下面 using 引入到当前匿名 namespace。
+using x64ai::util::safeUtf8Truncate;
+using x64ai::util::sanitizeUtf8;
 
 // K-36: 上下文压缩 —— 把最老的【整轮】(一条 assistant + 其后紧跟的全部 tool 消息)
 // 折叠成一条 system 摘要消息。整轮折叠是为了保证 assistant.toolCalls 与后续

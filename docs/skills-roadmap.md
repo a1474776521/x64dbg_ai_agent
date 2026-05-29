@@ -4,7 +4,7 @@
 > **每次完成一个 S 段后，更新本表的 ✅/❌ 列 + Done 行**。
 > 横向对照：[features.md](features.md) 是最终能力快照；本文件是规划+进度。
 
-最后更新：2026-05-29（**K-38 完成** = K-36 上下文压缩 UTF-8 截断 bug 修复（中文/emoji 不再触发 nlohmann::json type_error.316）+ AgentLoop 加 sanitizeUtf8 防御层。前置 K-37 = K-35 retry 误判修复 + confirm 5s→3s + run_continue 上限 300s。工具数仍 **76**）
+最后更新：2026-05-29（**K-39 完成** = 系统侧 5 新工具 `fs_read/write/create` + `shell_cmd/pwsh`，路径白名单 + 占位符 + JobObject KILL_ON_JOB_CLOSE + 4 个 Write 加 hardEnforced 永不豁免，工具数 76→**80**。前置 K-38 = UTF-8 截断 bug 修复 + sanitize 防御层；K-37 = retry 误判修复 + confirm 5s→3s）
 
 ---
 
@@ -191,8 +191,9 @@
 | **K-36** | **AgentLoop 编排增强：并行 read（一批全 Read 时 QtConcurrent 并发，上限 4，含非 Read 回退串行）+ 上下文压缩（超模型窗口 75% 折叠最老整轮为 system 摘要，整轮折叠保配对）；`config.json` 加 5 开关** | **0** | **0** | — | ✅（未 tag） |
 | **K-37** | **K-35 retry 误判修复：DbgControl 整体不 retry（`wait_for_event`/`step_*` 业务 timeout 不再被误重试浪费 1-2 分钟）+ confirm 倒计时 5s→3s + `run_continue.timeout_ms` 上限 60s→300s（unpack/trace 场景）** | **0** | **0** | — | ✅（未 tag） |
 | **K-38** | **K-36 上下文压缩 UTF-8 截断 bug 修复：`safeUtf8Truncate` 按字符边界截断（避免切断中文/emoji 多字节序列引发 `nlohmann::json type_error.316`）+ `sanitizeUtf8` 防御层（AgentLoop 在 provider 调用前对所有 message.content 兜底替换非法字节为 `?`）** | **0** | **0** | — | ✅（未 tag） |
+| **K-39** | **系统侧 5 新工具（group=`system`，工具数 76→80）：`fs_read_file` / `fs_write_file` / `fs_create_file` / `shell_cmd`（cmd.exe + GetACP 解码）/ `shell_pwsh`（pwsh 优先 fallback powershell + 注入 UTF-8 输出编码）；安全模型：路径白名单 + 占位符 `{plugin_workdir}` / `{plugin_temp}` / `{debuggee_dir}` / `{user_home}`，Shell 用 JobObject KILL_ON_JOB_CLOSE 防子进程逃逸，4 个 Write 工具加入 `confirmHardEnforced` 永不豁免；UTF-8 helper 抽到 `src/util/utf8_safe.h` 与 K-38 共享；EventBus 加 `ShellStarted/Finished/Timeout` 三事件；`config.json` 加 10 字段（`fs_allowed_dirs` + 大小/超时 default+cap 双层）** | **5** | **+5** | — | ✅（未 tag） |
 
-> 工具总数：S8=63 → K-28=64 → K-29=65 → K-31=70 → K-33=74 → 当前 **76**（K-34 +2；K-35 纯编排逻辑不增工具；详见 `docs/features.md §11 工具清单`）。
+> 工具总数：S8=63 → K-28=64 → K-29=65 → K-31=70 → K-33=74 → K-34=76 → 当前 **80**（K-39 +5 系统侧；K-35-K-38 纯编排/bugfix 不增工具；详见 `docs/features.md §11 工具清单`）。
 
 ---
 

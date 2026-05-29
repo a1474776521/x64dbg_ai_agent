@@ -28,6 +28,8 @@
 > - **K-35**：第 1 项（tool retry，AgentLoop 层 + `isTransientToolError` 白名单，仅非 Write）+ 第 2 项（auto-RAG，run 入口 embed+searchSimilar 注入 system）
 > - **K-36**：第 4 项（并行 read，全 Read 批次 QtConcurrent 上限 4，含非 Read 回退串行）+ 第 3 项（上下文压缩，超模型窗口 75% 折叠最老整轮为本地 system 摘要，整轮折叠保 tool_call_id 配对）
 > - **K-37**（K-35 bugfix）：DbgControl 类整体不 retry（`wait_for_event` 业务 timeout 不再被误重试浪费 1-2 分钟，复盘 2026-05-29 unpack-helper 跑 UPX 会话发现的 90+ 秒浪费）+ confirm 倒计时 5s→3s + `run_continue.timeout_ms` 上限 60s→300s
+> - **K-38**（K-36 bugfix）：上下文压缩按字节切坏 UTF-8 多字节字符触发 `nlohmann::json type_error.316`；修复 `safeUtf8Truncate` 按字符边界 + AgentLoop sanitize 防御层
+> - **K-39**（tool surface 扩展，非编排）：新增 group=`system` 5 工具（fs_read/write/create + shell_cmd + shell_pwsh），工具数 76→**80**；解决"LLM 无法读样本伴随中文文档 / 写分析报告 / 跑临时 PowerShell 取环境信息"短板；安全模型：路径白名单 + 占位符 + JobObject KILL_ON_JOB_CLOSE + 4 个 Write 加 `confirmHardEnforced` 永不豁免；对 §4 工具数表的"74"指标更新为 **80**
 > - 5 个开关全默认开，均有"回退串行 / 不压缩 / 不重试"安全退路；详见 `known-issues.md::K-35/K-36/K-37`、`decisions.md 2026-05-29`
 > **仅剩第 5 项 Plan-Execute / 两阶段 agent 未做**（高成本，复杂 task 必需）。
 
@@ -131,7 +133,7 @@ loop:
 
 | 维度 | x64dbg-ai-plugin | Claude Code | Cursor agent |
 |---|---|---|---|
-| 工具数 | 74 | ~15 内置 + MCP 扩展 | ~10 |
+| 工具数 | **80**（K-39，含 system 组 5 个） | ~15 内置 + MCP 扩展 | ~10 |
 | 工具粒度 | 细（read_memory / disasm_at / set_breakpoint 分开） | 中（Read/Edit/Bash 通用） | 中 |
 | 工具 schema 质量 | 高（含中文 description + zh-CN tag） | 高 | 高 |
 | 写工具护栏 | **5s confirm + audit + 二级护栏 K-30/K-32** | edit 前 read 强制 | edit 前 read 强制 |

@@ -25,6 +25,13 @@ const std::unordered_set<std::string>& hardEnforcedSet()
         "attach_debug",
         "stop_debug",
         "patch_file",
+        // K-39 系统侧工具：永不豁免 auto-approve
+        // shell_* 命令完全开放（Q2=B），必须人审；
+        // fs_write_file / fs_create_file 涉及磁盘写，一并强制 confirm 保险
+        "shell_cmd",
+        "shell_pwsh",
+        "fs_write_file",
+        "fs_create_file",
     };
     return kSet;
 }

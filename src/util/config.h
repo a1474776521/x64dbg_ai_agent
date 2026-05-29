@@ -100,6 +100,42 @@ struct AppConfig {
     bool contextCompressEnabled       = true;
     int  contextCompressThresholdPct  = 75;  // 占模型窗口百分比触发；10-95
     int  contextCompressKeepRounds    = 3;   // 末尾保留不压缩的轮数；>=1
+
+    // K-39：system tools（fs_read_file / fs_write_file / fs_create_file / shell_cmd / shell_pwsh）
+    //
+    // 文件系统白名单。**仅这些目录内的路径**可被 fs_* 工具读写。
+    // 配置时支持以下占位符（loadConfig 会就地展开）：
+    //   {plugin_workdir}   ->  pluginRootDir()       即 %APPDATA%/x64dbg-ai-plugin/
+    //   {plugin_temp}      ->  %TEMP%/x64dbg-ai-plugin/
+    //   {debuggee_dir}     ->  当前主调试模块所在目录（运行时按 ToolContext 解析）
+    //   {user_home}        ->  %USERPROFILE%/
+    // 留空 → 启用默认集合：[{plugin_workdir}, {plugin_temp}]（按 Q4=a，不含 debuggee_dir）。
+    //
+    // 路径校验规则（见 system_tools.cpp）：
+    //   - 绝对路径化 + 前缀匹配白名单目录（含末尾分隔符）
+    //   - 拒绝含 ".." 的原始路径（防绕过）
+    //   - 拒绝 reparse point（junction/symlink）
+    //   - 拒绝 UNC / 设备名（NUL/CON/PRN/AUX/COM*/LPT*）
+    std::vector<std::string> fsAllowedDirs;
+
+    // fs_read_file：单次最多读取字节数。默认 64KB，上限 4MB。
+    int fsReadMaxBytesDefault = 65536;
+    int fsReadMaxBytesCap     = 4194304;
+
+    // fs_write_file / fs_create_file：单次 content 字节数上限。默认 = cap = 4MB。
+    int fsWriteMaxBytesCap    = 4194304;
+
+    // shell_cmd / shell_pwsh：子进程执行超时。
+    // 默认 30s，上限 5min（与 K-37 run_continue 一致）。
+    int shellTimeoutMsDefault = 30000;
+    int shellTimeoutMsCap     = 300000;
+
+    // shell_cmd / shell_pwsh：stdout / stderr 各自的字节数上限（捕获后超出截断 + truncated=true）。
+    // 默认 64KB，上限 1MB。
+    int shellStdoutMaxBytesDefault = 65536;
+    int shellStdoutMaxBytesCap     = 1048576;
+    int shellStderrMaxBytesDefault = 65536;
+    int shellStderrMaxBytesCap     = 1048576;
 };
 
 class Config {

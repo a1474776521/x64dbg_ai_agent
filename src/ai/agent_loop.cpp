@@ -397,9 +397,13 @@ int AgentLoop::run(AgentRunRequest&         req,
             ToolResult tr = registry.dispatch(tc.name, tc.argumentsJson, ctx);
 
             // K-35: tool retry —— 仅对【非 Write】工具的【瞬时错误】退避重试。
+            // K-37: 同时排除【DbgControl】类（wait_for_event / step_* / run_until）——
+            //       其 "timeout" 几乎都是业务超时（没等到事件），重试只是再 timeout 一次，
+            //       白白浪费 30-120 秒。实测脱壳场景 K-35 误命中 3 次浪费 90 秒。
             if (appCfg.toolRetryEnabled && appCfg.toolRetryMax > 0 &&
                 isTransientToolError(tr) &&
-                registry.categoryOf(tc.name) != ToolCategory::Write) {
+                registry.categoryOf(tc.name) != ToolCategory::Write &&
+                registry.categoryOf(tc.name) != ToolCategory::DbgControl) {
                 for (int attempt = 1; attempt <= appCfg.toolRetryMax; ++attempt) {
                     if (cancel.load()) break;
                     const int backoffMs = 300 * attempt;

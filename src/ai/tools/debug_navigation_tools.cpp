@@ -75,7 +75,7 @@ public:
     std::string descriptionZh() const override
     {
         return "继续执行（Run）。默认 fire-and-forget 立刻返回 —— 之后用 wait_for_event 观察下次暂停。"
-               "若设 wait_for_stop=true 则阻塞至 Paused/Breakpoint（超时默认 30 秒）。";
+               "若设 wait_for_stop=true 则阻塞至 Paused/Breakpoint（超时默认 30 秒、上限 300 秒）。";
     }
     nlohmann::json parametersSchema() const override
     {
@@ -85,7 +85,7 @@ public:
                 {"wait_for_stop", {{"type", "boolean"},
                                    {"description", "Block until next stop; default false"}}},
                 {"timeout_ms",    {{"type", "integer"},
-                                   {"description", "Wait timeout when wait_for_stop=true; default 30000, max 60000"}}},
+                                   {"description", "Wait timeout when wait_for_stop=true; default 30000, max 300000 (5 min, raised in K-37 for unpack/trace scenarios)"}}},
             }},
         };
     }
@@ -101,7 +101,7 @@ public:
         }
         int timeoutMs = 30000;
         std::string e;
-        if (tryGetInt32Hint(args, "timeout_ms", 100, 60000, timeoutMs, e)) {}
+        if (tryGetInt32Hint(args, "timeout_ms", 100, 300000, timeoutMs, e)) {}
         else if (!e.empty()) { r.ok=false; r.error="invalid 'timeout_ms': "+e; return r; }
 
         if (!DbgCmdExecDirect("run")) {

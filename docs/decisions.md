@@ -12,6 +12,33 @@
 
 ---
 
+## 2026-05-29 · K-37：K-35 retry 误判修复（DbgControl 整体不 retry vs 错误文案反白名单）
+
+**背景**：2026-05-29 10:xx 用户真机会话 `unpack-helper` 跑 UPX，复盘 plugin.log 发现 K-35 的 retry 把 3 次 `wait_for_event` 业务 timeout 当作"瞬时错误"重试，每次再等同样长，共浪费约 90-150 秒。
+
+**根因**：`isTransientToolError` 关键字白名单含 `"timeout"`，本意是匹配网络/HTTP 超时，但会同时命中 `wait_for_event` 的"没等到事件"业务超时。
+
+**候选**：
+- **A. DbgControl 类整体排除 retry**：retry 条件加 `categoryOf != DbgControl`
+- **B. 错误文案反白名单**：在 `isTransientToolError` 增加排除关键字（如 `"waiting for next stop"` / `"breakpoint timeout"`）
+- **C. 不修，让用户手动 `tool_retry_enabled=false`**
+
+**选定 A**：
+- DbgControl 这一档语义先天就是"等待调试器事件"——其超时本质是业务结果（没等到），与"网络抖动可重试"概念正交，按 ToolCategory 一刀切最稳
+- B 是字符串启发式，新工具/新错误文案要持续维护反白名单，技术债
+- `tool_registry.h` 早就把 DbgControl 单独分档，本次直接复用 0 额外维护成本
+- C 默认行为仍坏，不可接受
+
+**代价**：未来若 DbgControl 工具有"真瞬时错误"场景（极少见，本项目暂无），不会自动重试；但这类工具用户能直接看到结果，手动重试即可
+
+**为什么不动 `run_continue` 的 category=Write 错配**：`run_continue` 历史上归 Write 是为了走 5s confirm；改成 DbgControl 会绕过 confirm（用户没确认就开 Run）。K-37 不动分类、只放宽 `timeout_ms` 上限（60s→300s）解决具体问题
+
+**另两项小调整（顺便修，无候选权衡）**：
+- confirm 倒计时 5s→3s（用户反馈 5s 太长，UPX 脱壳要按多次"允许")
+- `run_continue.timeout_ms` 上限 60s→300s（log 显示 LLM 试图传 120s 被拒；unpack/trace 场景 60s 不够）
+
+---
+
 ## 2026-05-29 · K-36：并行 read 后端 + 上下文压缩策略选型
 
 **背景**：K-35 后继续推进 `agent-capability-assessment.md` 的第 4 项（只读工具并行）+ 第 3 项（上下文压缩）。用户明确想做这两个。

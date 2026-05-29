@@ -27,7 +27,8 @@
 > **落地进度（2026-05-29 更新）**：本报告 §7 原把 K-33~K-37 当占位编号，但实际开发中 K-33/K-34 已被其它工作占用（K-33=confirm 豁免、K-34=malware-triage 升级）。编排改进实际落在 **K-35 / K-36**，已实现本节 5 项中的前 4 项：
 > - **K-35**：第 1 项（tool retry，AgentLoop 层 + `isTransientToolError` 白名单，仅非 Write）+ 第 2 项（auto-RAG，run 入口 embed+searchSimilar 注入 system）
 > - **K-36**：第 4 项（并行 read，全 Read 批次 QtConcurrent 上限 4，含非 Read 回退串行）+ 第 3 项（上下文压缩，超模型窗口 75% 折叠最老整轮为本地 system 摘要，整轮折叠保 tool_call_id 配对）
-> - 5 个开关全默认开，均有"回退串行 / 不压缩 / 不重试"安全退路；详见 `known-issues.md::K-35/K-36`、`decisions.md 2026-05-29`
+> - **K-37**（K-35 bugfix）：DbgControl 类整体不 retry（`wait_for_event` 业务 timeout 不再被误重试浪费 1-2 分钟，复盘 2026-05-29 unpack-helper 跑 UPX 会话发现的 90+ 秒浪费）+ confirm 倒计时 5s→3s + `run_continue.timeout_ms` 上限 60s→300s
+> - 5 个开关全默认开，均有"回退串行 / 不压缩 / 不重试"安全退路；详见 `known-issues.md::K-35/K-36/K-37`、`decisions.md 2026-05-29`
 > **仅剩第 5 项 Plan-Execute / 两阶段 agent 未做**（高成本，复杂 task 必需）。
 
 ---

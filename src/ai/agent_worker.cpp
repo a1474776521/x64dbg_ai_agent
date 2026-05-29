@@ -60,7 +60,7 @@ void AgentWorker::start(AgentRunRequest req)
                 QString::fromStdString(toolName),
                 QString::fromStdString(summary),
                 QString::fromStdString(argsPretty),
-                /*countdownSec=*/5);
+                /*countdownSec=*/3);  // K-37: 5s -> 3s（用户反馈 5s 太长）
         };
 
         AgentRunCallbacks cb;

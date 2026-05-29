@@ -4,7 +4,7 @@
 //
 // 要点：
 //   - 模态 QDialog，必须在 GUI 线程构造和 exec。
-//   - 5 秒倒计时；倒计时未结束时"允许"按钮 disabled 并显示 "Allow (Ns)"。
+//   - 3 秒倒计时；倒计时未结束时"允许"按钮 disabled 并显示 "Allow (Ns)"。（K-37：5s→3s）
 //   - 用户点拒绝、关闭、ESC 均视为拒绝。
 //   - 不能 show modal-less，否则 agent 工具线程会立即继续。
 //
@@ -28,11 +28,11 @@ public:
     // toolName: 工具名（窗口标题）
     // summary:  一句话描述本次操作的副作用（"在 0x401000 设置软件断点"）
     // argsJson: 详细参数 JSON（pretty 后展示，给高级用户看）
-    // countdownSec: 倒计时秒数，默认 5
+    // countdownSec: 倒计时秒数，默认 3（K-37：5→3，用户反馈 5s 太长）
     explicit ToolConfirmDialog(const QString& toolName,
                                const QString& summary,
                                const QString& argsJson,
-                               int            countdownSec = 5,
+                               int            countdownSec = 3,
                                QWidget*       parent       = nullptr);
 
     // 工具线程调用入口：阻塞跨线程显示 dialog，返回是否允许。
@@ -40,7 +40,7 @@ public:
     static bool confirmFromBackground(const QString& toolName,
                                       const QString& summary,
                                       const QString& argsJson,
-                                      int            countdownSec = 5);
+                                      int            countdownSec = 3);
 
 private slots:
     void onTick();

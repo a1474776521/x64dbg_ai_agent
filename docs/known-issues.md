@@ -454,6 +454,44 @@
 
 ---
 
+### K-37：K-35 retry 误判调试器业务超时 + confirm 倒计时偏长 + run_continue 上限过严 ✅ 已修复
+- **状态**：2026-05-29
+- **现象**（来自 2026-05-29 10:xx 用户真机会话 `unpack-helper` 跑 UPX 样本的 plugin.log 复盘）：
+  1. **K-35 retry 误判**：3 次 `wait_for_event` 业务 timeout（没等到断点）被 `isTransientToolError` 的 `"timeout"` 关键字命中当作"瞬时错误"自动重试，每次重试又等同样长 → iter#7 浪费 30s、iter#14 / iter#26 各浪费 60s、共浪费 ~150 秒。其它 `run_continue timeout` 因 category=Write 已被 K-35 排除未被误重试
+  2. **confirm 倒计时太长**：用户反馈 5s 倒计时过长，UPX 脱壳要按多次"允许"很烦躁
+  3. **`run_continue` `timeout_ms` 上限 60s 过严**：LLM 试图传 `timeout_ms=120000` 被 `tryGetInt32Hint(args, "timeout_ms", 100, 60000, ...)` 拒（iter#30 `invalid 'timeout_ms': value out of range [100, 60000]`）。unpack/trace 场景下 60s 经常不够，应放宽到 5 分钟
+- **修复**：
+  - **K-37.1 retry 排除 DbgControl 类**（`agent_loop.cpp` 重试条件）：
+    - 原 K-35 条件：`categoryOf != Write`
+    - 新条件：`categoryOf != Write && categoryOf != DbgControl`
+    - DbgControl 类工具（`wait_for_event` / `step_in/step_over/step_out` / `run_until`）的 timeout 几乎都是**业务超时**（没等到目标事件），重试只会再等一次相同的 timeout，浪费时间。`tool_registry.h` 已把这类工具单独分档，本次直接复用
+    - 非 DbgControl 的 Read 工具（embedding/HTTP/rag_search 等）仍按原 K-35 规则重试
+  - **K-37.2 confirm 倒计时 5s → 3s**：
+    - `agent_worker.cpp:63` 硬编码 `countdownSec=5` → `3`
+    - `tool_confirm_dialog.h` 构造函数和 `confirmFromBackground` 两处 `int countdownSec = 5` 默认值同步改 3
+    - 头部文档注释同步
+  - **K-37.3 `run_continue` `timeout_ms` 上限 60000 → 300000**：
+    - `debug_navigation_tools.cpp:104` `tryGetInt32Hint(args, "timeout_ms", 100, 60000, ...)` → `300000`
+    - `parametersSchema.timeout_ms.description` 同步 `"max 60000"` → `"max 300000 (5 min, raised in K-37 for unpack/trace scenarios)"`
+    - `descriptionZh()` 同步 "超时默认 30 秒" → "超时默认 30 秒、上限 300 秒"
+    - **未改 `pause_debug`/`step_*`/`wait_for_event` 等其它工具的上限**：那些工具的语义是"短期等待"，300s 上限会让 cancel 响应变慢；K-37 仅放宽 `run_continue`（unpack/trace 主力工具）
+- **设计取舍**：
+  - **为什么不在 `isTransientToolError` 加错误文案反白名单（如排除 "waiting for next stop"）**：白名单/反白名单都是字符串启发式，新工具/新错误文案要持续维护。按 `ToolCategory` 整段排除更稳：DbgControl 这一档本就是"等事件类"，其失败语义先天与"网络抖动可重试"对立
+  - **为什么 `run_continue` 的 category 是 Write 不是 DbgControl**：历史遗留——`run_continue` 改了执行流但本质是"继续执行"指令，作者当年归到 Write 是为了走 confirm。K-37 不动这个分类（动了会绕过 5s confirm），仅放宽 timeout 上限解决具体问题
+  - **`pause_debug` 用了 `{"string":"true"}` 这种乱七八糟参数**：LLM 错调用，本次不修工具侧（错就该报错让 LLM 学）；可后续在 description 加示例参数引导
+- **影响**：
+  - 脱壳/trace 场景不再因 retry 误判额外等 1-2 分钟
+  - confirm 总等待时间 5s→3s，多步操作累计提速明显
+  - `run_continue` 长时运行（如等 OEP）不再因协议上限被卡
+  - 工具数 / 体积不变；dp64 11.66MB / dp32 8.57MB
+- **位置**：
+  - `src/ai/agent_loop.cpp`：retry 条件加 `!= ToolCategory::DbgControl`
+  - `src/ai/agent_worker.cpp:63`：`countdownSec=5` → `3`
+  - `src/ui/tool_confirm_dialog.h`：两处默认参数 5→3 + 头注释
+  - `src/ai/tools/debug_navigation_tools.cpp`：`run_continue` 的 `timeout_ms` 上限 60000→300000 + description 同步
+
+---
+
 
 ## ⚪ 未支持（设计取舍，不是 bug）
 

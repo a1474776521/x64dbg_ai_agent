@@ -433,6 +433,9 @@ ToolPolicy 是「**所有写都需 confirm + audit**」的横切护栏；K-30 �
 - 本轮结束若 `tool_calls.empty()` → 完成；否则按序 `dispatch` 每个工具，结果 `role=tool, tool_call_id=...` 写回 `messages`，进入下一轮
 - **K-35 tool retry**：某次 `dispatch` 失败且属瞬时错误（`isTransientToolError`：timeout/connection/network/embedding failed/5xx/rate limit/ssl…）且工具**非 Write 类**时，按 `300ms*attempt` 退避自动重试（默认 1 次、上限 3）；Write 类（断点/dbg cmd/patch）永不重试避免重复副作用。`tool_retry_enabled` / `tool_retry_max`
 - **K-35 auto-RAG 注入**：run 入口（仅一次）按首条 user 消息 `embed` + `SessionStore::searchSimilar(top_k)` 召回历史分析 chunks，拼成 `system` 消息插到最后一条 user 之前；无 store / embed 失败 / 无结果静默跳过。`auto_rag_inject_enabled` / `auto_rag_top_k`（默认开、top_k=4）
+- **K-36 并行 read**：当一轮 tool_calls **全为 Read 类**（任一 DbgControl/Write 即整批回退串行）时，用 `QThreadPool` + `QtConcurrent` 并发 dispatch（上限 `parallel_read_max`，默认 4）；结果按原始下标收集，回调 + 写回 `messages` 仍在主线程按原序（保证 tool_call_id 配对）。retry 逻辑在并行分支内每个工具仍生效。`parallel_read_enabled` / `parallel_read_max`（默认开、上限 4）
+  - 注：UI 一直把一轮多卡片一次性预创建成 pending（视觉像并行）；K-36 之前底层是串行 dispatch，K-36 后只读批次才真正并发
+- **K-36 上下文压缩**：每轮 streamChat 前按 `字符/4` 粗估累计 token，超过 `模型窗口 * 阈值%`（默认 75%）时反复折叠**最老整轮**（一条 assistant + 其全部 tool 消息 → 一条本地 system 摘要，不调 LLM）；开头 system + 末尾 `keep_rounds` 轮（默认 3）永不压缩。整轮折叠保证 assistant↔tool_call_id 配对不破。模型窗口表：deepseek 64K / gpt-4o·o-series 128K / claude 200K / 未知 32K。`context_compress_enabled` / `context_compress_threshold_pct` / `context_compress_keep_rounds`
 - 安全上限：`max_iter = 20`（预设可调，1–50）；每工具 64 KB 硬截断；写类工具本批未开放
 - 全部工具调用进 `plugin.log`
 

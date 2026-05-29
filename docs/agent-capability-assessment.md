@@ -24,12 +24,11 @@
 4. 只读工具并行执行（中等成本，速度 2-5×）
 5. Plan-Execute 两阶段（高成本，复杂 task 必需）
 
-> **落地进度（2026-05-29 更新）**：本报告 §7 原把 K-33~K-37 当占位编号，但实际开发中 K-33/K-34 已被其它工作占用（K-33=confirm 豁免、K-34=malware-triage 升级）。编排改进实际落在 **K-35**，且首批合并实现了**第 1 项（tool retry）+ 第 2 项（auto-RAG 注入）**两项：
-> - retry 放 `AgentLoop` 层（非 dispatch decorator）：用文案白名单 `isTransientToolError` 判瞬时错误，仅非 Write 工具退避重试，默认 1 次
-> - auto-RAG 在 run 入口注入一次：首条 user 问句 `embed` + `searchSimilar(top_k)` 拼成 system 消息
-> - 两开关默认开（`tool_retry_enabled` / `auto_rag_inject_enabled`）
-> - 详见 `known-issues.md::K-35` / `decisions.md 2026-05-29`
-> 仍待做：第 3 项上下文压缩、第 4 项并行 read、第 5 项 Plan-Execute。
+> **落地进度（2026-05-29 更新）**：本报告 §7 原把 K-33~K-37 当占位编号，但实际开发中 K-33/K-34 已被其它工作占用（K-33=confirm 豁免、K-34=malware-triage 升级）。编排改进实际落在 **K-35 / K-36**，已实现本节 5 项中的前 4 项：
+> - **K-35**：第 1 项（tool retry，AgentLoop 层 + `isTransientToolError` 白名单，仅非 Write）+ 第 2 项（auto-RAG，run 入口 embed+searchSimilar 注入 system）
+> - **K-36**：第 4 项（并行 read，全 Read 批次 QtConcurrent 上限 4，含非 Read 回退串行）+ 第 3 项（上下文压缩，超模型窗口 75% 折叠最老整轮为本地 system 摘要，整轮折叠保 tool_call_id 配对）
+> - 5 个开关全默认开，均有"回退串行 / 不压缩 / 不重试"安全退路；详见 `known-issues.md::K-35/K-36`、`decisions.md 2026-05-29`
+> **仅剩第 5 项 Plan-Execute / 两阶段 agent 未做**（高成本，复杂 task 必需）。
 
 ---
 

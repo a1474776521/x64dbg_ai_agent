@@ -19,6 +19,10 @@
 #include <sstream>
 #include <thread>
 
+#include <QtConcurrent/QtConcurrent>
+#include <QThreadPool>
+#include <QFuture>
+
 namespace x64ai {
 
 namespace {
@@ -114,6 +118,122 @@ std::string buildAutoRagContext(const std::vector<ChatMessage>& messages,
     return os.str();
 }
 
+// K-36: 粗估一条消息的 token 数（无 tokenizer，用"字符数/4"经验比例 + 角色/工具开销）。
+std::size_t estimateMessageTokens(const ChatMessage& m)
+{
+    std::size_t chars = m.content.size() + m.reasoningContent.size();
+    for (const auto& tc : m.toolCalls) {
+        chars += tc.name.size() + tc.argumentsJson.size() + 8;
+    }
+    chars += m.toolName.size() + m.toolCallId.size();
+    // 每条消息固定结构开销（role/分隔符等）≈ 4 tokens
+    return chars / 4 + 4;
+}
+
+std::size_t estimateTokens(const std::vector<ChatMessage>& msgs)
+{
+    std::size_t t = 0;
+    for (const auto& m : msgs) t += estimateMessageTokens(m);
+    return t;
+}
+
+// K-36: 按模型名估算上下文窗口（token）。未知模型给保守默认。
+std::size_t providerContextWindow(const std::string& modelRaw)
+{
+    std::string m = modelRaw;
+    std::transform(m.begin(), m.end(), m.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    auto has = [&](const char* k) { return m.find(k) != std::string::npos; };
+
+    // DeepSeek：官方 chat/reasoner 当前 64K 上下文
+    if (has("deepseek")) return 64000;
+    // OpenAI gpt-4o / 4.1 / o-series：128K
+    if (has("gpt-4o") || has("gpt-4.1") || has("o1") || has("o3") || has("o4")) return 128000;
+    if (has("gpt-4-turbo") || has("gpt-4-1106") || has("gpt-4-0125")) return 128000;
+    if (has("gpt-3.5")) return 16000;
+    if (has("gpt-4")) return 8000;  // 老 gpt-4 基础版
+    // Anthropic via Copilot：Claude 3.x 200K
+    if (has("claude")) return 200000;
+    // 未知：保守 32K
+    return 32000;
+}
+
+// K-36: 上下文压缩 —— 把最老的【整轮】(一条 assistant + 其后紧跟的全部 tool 消息)
+// 折叠成一条 system 摘要消息。整轮折叠是为了保证 assistant.toolCalls 与后续
+// tool.toolCallId 的配对不被拆散（OpenAI/DeepSeek 协议强约束，拆散会 400）。
+//
+// 约束：
+//   - 开头连续的 system 消息（含 auto-RAG 注入）永不压缩
+//   - 末尾 keepRounds 个"轮单元"永不压缩（保留近期上下文）
+//   - 至少要能压掉一个轮单元才动手；压不动就原样返回 false
+//
+// 返回 true 表示发生了压缩。
+bool compressOldestRound(std::vector<ChatMessage>& msgs, int keepRounds)
+{
+    if (msgs.size() < 4) return false;
+
+    // 1) 定位"可压缩区"起点：跳过开头连续 system
+    std::size_t head = 0;
+    while (head < msgs.size() && msgs[head].role == "system") ++head;
+
+    // 2) 把 [head, end) 切成"轮单元"：每个 user 或 assistant 起一轮，
+    //    其后紧跟的 tool 消息归入同一轮。记录每轮的 [begin,end)。
+    struct Round { std::size_t begin; std::size_t end; bool hasAssistantTools; };
+    std::vector<Round> rounds;
+    std::size_t i = head;
+    while (i < msgs.size()) {
+        Round r;
+        r.begin = i;
+        r.hasAssistantTools = (msgs[i].role == "assistant" && !msgs[i].toolCalls.empty());
+        ++i;
+        // 吸收紧跟的 tool 消息（属于上一条 assistant 的工具结果）
+        while (i < msgs.size() && msgs[i].role == "tool") { ++i; }
+        r.end = i;
+        rounds.push_back(r);
+    }
+
+    // 3) 保留末尾 keepRounds 轮 + 至少要有可压的轮
+    if (static_cast<int>(rounds.size()) <= keepRounds) return false;
+    const std::size_t compressibleRounds = rounds.size() - static_cast<std::size_t>(keepRounds);
+    if (compressibleRounds == 0) return false;
+
+    // 4) 折叠最老的那一轮（rounds[0]）—— 只压一个轮单元，调用方循环直到达标
+    const Round& target = rounds[0];
+
+    std::ostringstream os;
+    os << "[Compressed older turn (auto context-compression to fit model window). "
+          "Original messages summarized below; re-run a tool if you need exact data.]\n";
+    for (std::size_t k = target.begin; k < target.end; ++k) {
+        const ChatMessage& m = msgs[k];
+        os << "- " << m.role;
+        if (!m.toolCalls.empty()) {
+            os << " called:";
+            for (const auto& tc : m.toolCalls) os << " " << tc.name << "()";
+        }
+        if (m.role == "tool") {
+            os << " [" << m.toolName << "]";
+        }
+        // 内容摘要：每条最多留 300 字符
+        std::string body = m.content;
+        // 去掉换行噪声便于单行展示
+        for (auto& ch : body) if (ch == '\n' || ch == '\r') ch = ' ';
+        if (body.size() > 300) body = body.substr(0, 300) + "...";
+        if (!body.empty()) os << ": " << body;
+        os << "\n";
+    }
+
+    ChatMessage summary;
+    summary.role    = "system";
+    summary.content = os.str();
+
+    // 5) 用 summary 替换 [target.begin, target.end)
+    auto first = msgs.begin() + static_cast<std::ptrdiff_t>(target.begin);
+    auto last  = msgs.begin() + static_cast<std::ptrdiff_t>(target.end);
+    msgs.erase(first, last);
+    msgs.insert(msgs.begin() + static_cast<std::ptrdiff_t>(target.begin), std::move(summary));
+    return true;
+}
+
 }  // namespace
 
 int AgentLoop::run(AgentRunRequest&         req,
@@ -168,6 +288,29 @@ int AgentLoop::run(AgentRunRequest&         req,
             return iter;
         }
         ++iter;
+
+        // K-36: 上下文压缩 —— 每轮 streamChat 前检查累计 token 是否超阈值，
+        // 超则反复折叠最老整轮直到达标（或压不动）。整轮折叠保证 tool_call 配对不破。
+        if (appCfg.contextCompressEnabled) {
+            const std::string modelName =
+                req.model.empty() ? req.provider->defaultModel() : req.model;
+            const std::size_t window = providerContextWindow(modelName);
+            const std::size_t budget =
+                window * static_cast<std::size_t>(appCfg.contextCompressThresholdPct) / 100;
+            std::size_t est = estimateTokens(req.messages);
+            if (est > budget) {
+                int folded = 0;
+                while (est > budget &&
+                       compressOldestRound(req.messages, appCfg.contextCompressKeepRounds)) {
+                    ++folded;
+                    est = estimateTokens(req.messages);
+                }
+                XAI_LOG_WARN("AgentLoop iter#{}: context-compress folded {} round(s); "
+                             "est_tokens now={} budget={} (window={} pct={})",
+                             iter, folded, est, budget, window,
+                             appCfg.contextCompressThresholdPct);
+            }
+        }
 
         // 本轮捕获用的临时状态
         struct RoundState {
@@ -242,24 +385,24 @@ int AgentLoop::run(AgentRunRequest&         req,
             return iter;
         }
 
-        // 顺序执行 tool_calls
-        for (const auto& tc : st.toolCalls) {
-            if (cancel.load()) {
-                if (cb.onError) cb.onError("agent: cancelled during tool dispatch");
-                return iter;
-            }
+        if (cancel.load()) {
+            if (cb.onError) cb.onError("agent: cancelled during tool dispatch");
+            return iter;
+        }
 
-            const auto t0 = std::chrono::steady_clock::now();
+        // dispatch + K-35 retry 封装；可在主线程串行调用，也可在线程池并发调用。
+        // 仅做 ToolRegistry::dispatch + 退避重试，不碰 req.messages / cb（非线程安全部分留主线程）。
+        auto runOneTool = [&](const ToolCall& tc) -> std::pair<ToolResult, long long> {
+            const auto s0 = std::chrono::steady_clock::now();
             ToolResult tr = registry.dispatch(tc.name, tc.argumentsJson, ctx);
 
             // K-35: tool retry —— 仅对【非 Write】工具的【瞬时错误】退避重试。
-            // Write 类（断点/dbg cmd/patch）已确认的副作用不能重复触发，永不重试。
             if (appCfg.toolRetryEnabled && appCfg.toolRetryMax > 0 &&
                 isTransientToolError(tr) &&
                 registry.categoryOf(tc.name) != ToolCategory::Write) {
                 for (int attempt = 1; attempt <= appCfg.toolRetryMax; ++attempt) {
                     if (cancel.load()) break;
-                    const int backoffMs = 300 * attempt;  // 300ms / 600ms / 900ms
+                    const int backoffMs = 300 * attempt;
                     XAI_LOG_WARN("AgentLoop iter#{} tool='{}' transient error '{}' "
                                  "-> retry {}/{} after {}ms",
                                  iter, tc.name, tr.error, attempt, appCfg.toolRetryMax, backoffMs);
@@ -271,12 +414,61 @@ int AgentLoop::run(AgentRunRequest&         req,
                                      iter, tc.name, attempt, appCfg.toolRetryMax);
                         break;
                     }
-                    if (!isTransientToolError(tr)) break;  // 变成非瞬时错误，停止重试
+                    if (!isTransientToolError(tr)) break;
                 }
             }
-            const auto t1 = std::chrono::steady_clock::now();
-            const long long elapsedMs =
-                std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+            const auto s1 = std::chrono::steady_clock::now();
+            const long long ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(s1 - s0).count();
+            return {std::move(tr), ms};
+        };
+
+        // K-36: 并行 read 判定 —— 仅当本批 tool_calls 全为 Read 类、开关开启、且数量>1
+        // 时用线程池并发；只要有一个 DbgControl/Write 立即回退串行（保证 confirm/audit/
+        // 写副作用时序）。
+        const int callCount = static_cast<int>(st.toolCalls.size());
+        bool allRead = true;
+        for (const auto& tc : st.toolCalls) {
+            if (registry.categoryOf(tc.name) != ToolCategory::Read) { allRead = false; break; }
+        }
+        const bool useParallel = appCfg.parallelReadEnabled && appCfg.parallelReadMax > 1 &&
+                                 allRead && callCount > 1;
+
+        // 结果按原始顺序收集（保证 tool 消息顺序 == tool_calls 顺序 → 配对正确）
+        std::vector<std::pair<ToolResult, long long>> results(static_cast<std::size_t>(callCount));
+
+        if (useParallel) {
+            const int conc = std::min(appCfg.parallelReadMax, callCount);
+            XAI_LOG_INFO("AgentLoop iter#{}: parallel-read {} tools (max_conc={})",
+                         iter, callCount, conc);
+            QThreadPool pool;
+            pool.setMaxThreadCount(conc);
+            std::vector<QFuture<void>> futures;
+            futures.reserve(static_cast<std::size_t>(callCount));
+            for (int idx = 0; idx < callCount; ++idx) {
+                futures.push_back(QtConcurrent::run(&pool, [&, idx]() {
+                    const ToolCall& tcl = st.toolCalls[static_cast<std::size_t>(idx)];
+                    results[static_cast<std::size_t>(idx)] = runOneTool(tcl);
+                }));
+            }
+            for (auto& f : futures) f.waitForFinished();
+        } else {
+            // 串行：与原行为一致；含 DbgControl/Write 走此路径
+            for (int idx = 0; idx < callCount; ++idx) {
+                if (cancel.load()) {
+                    if (cb.onError) cb.onError("agent: cancelled during tool dispatch");
+                    return iter;
+                }
+                results[static_cast<std::size_t>(idx)] =
+                    runOneTool(st.toolCalls[static_cast<std::size_t>(idx)]);
+            }
+        }
+
+        // 回调 + append tool 消息：始终在主循环线程、按原始顺序做（cb 非线程安全）
+        for (int idx = 0; idx < callCount; ++idx) {
+            const ToolCall&  tc  = st.toolCalls[static_cast<std::size_t>(idx)];
+            ToolResult&      tr  = results[static_cast<std::size_t>(idx)].first;
+            const long long  elapsedMs = results[static_cast<std::size_t>(idx)].second;
 
             const std::string serialized = ToolRegistry::serializeForLlm(tr);
 

@@ -416,6 +416,44 @@
 
 ---
 
+### K-36：AgentLoop 工具串行执行 + 上下文无界增长（并行 read + 上下文压缩） ✅ 已修复
+- **状态**：2026-05-29
+- **现象**（接 `docs/agent-capability-assessment.md` 评估第 4/3 项）：
+  1. **工具严格串行**：一轮 LLM 回吐 N 个 tool_calls 时，`agent_loop.cpp` 用串行 `for` 逐个 dispatch。多个**只读**探查（read_memory/disasm/list_xrefs…）本可并发却被串成一条线，慢
+     - 注：UI 早就把一轮多卡片一次性预创建成 pending（`assistant_panel.cpp:1188`），**视觉上像并行**，但底层一直是串行 dispatch —— 这是用户反馈"看起来已经并行 read"的来源
+  2. **上下文无界增长**：`req.messages` 每轮只增不减，长会话（多轮工具往返）累积到撞 provider 上下文窗口直接 400 / 截断
+- **修复（K-36 编排增强）**：
+  - **并行 read**（`agent_loop.cpp` 工具执行块重构）：
+    - 把 dispatch+retry 抽成 `runOneTool(tc)` lambda，串行/并行两路复用（retry 逻辑 K-35 完全保留）
+    - **仅当本批 tool_calls 全为 Read 类 + 开关开 + count>1** 时，用 `QThreadPool` + `QtConcurrent::run` 并发（最多 `parallelReadMax` 个，默认 4）
+    - **只要有一个 DbgControl/Write 立即回退串行**：保证 confirm 弹窗顺序 + audit 顺序 + 写副作用时序不被打乱
+    - 结果用 `std::vector results[idx]` 按**原始下标**收集；回调（`onToolReport`）+ append tool 消息**始终在主循环线程按原序做**（cb 最终发 Qt signal，非线程安全；且 tool 消息顺序必须 == tool_calls 顺序才能配对）
+    - 默认开、上限 4（`parallel_read_enabled` / `parallel_read_max`，1=关、上限 8）
+  - **上下文压缩**（`agent_loop.cpp` 每轮 streamChat 前）：
+    - token 粗估 `estimateTokens`：字符数/4 + 每条 4 token 结构开销（无 tokenizer）
+    - 模型窗口 `providerContextWindow(model)`：deepseek 64K / gpt-4o·4.1·o-series 128K / claude 200K / 未知保守 32K
+    - 超过 `窗口 * contextCompressThresholdPct%`（默认 75%）→ 反复折叠**最老整轮**直到达标
+    - **整轮折叠**（`compressOldestRound`）：一条 assistant(带tool_calls) + 其后紧跟的全部 tool 消息作为一个原子单元，折叠成一条 system 摘要（本地拼 role+工具名+前 300 字符，**不调 LLM**）
+    - **永不压缩**：开头连续 system（含 auto-RAG 注入）+ 末尾 `contextCompressKeepRounds` 轮（默认 3）+ 末轮
+    - 默认开、阈值 75%、保留 3 轮（`context_compress_enabled` / `context_compress_threshold_pct` / `context_compress_keep_rounds`）
+- **设计取舍 / 关键正确性点**：
+  - **整轮折叠是配对正确性的命门**：OpenAI/DeepSeek 协议要求 assistant 的每个 tool_call 后必须紧跟同 `tool_call_id` 的 tool 消息；若按"消息条数"截断会把配对拆散触发 provider 400。按"轮单元"折叠保证 assistant↔tool 永远成套删/留
+  - **并行只并行 dispatch**：回调和 messages.push_back 留主线程串行，规避 cb 线程安全 + 顺序问题
+  - **lambda 捕获坑**：并行任务捕获 `idx`（值）而非 `&tc`（引用循环变量会因循环推进而全部指向最后一个，悬空）；lambda 内用 `st.toolCalls[idx]` 取
+  - **并行后端选 QtConcurrent**：agent_worker.cpp 同目录已用、`src/CMakeLists.txt` 已链 `Qt5::Concurrent`，零额外依赖
+  - **本地截断而非 LLM 摘要**：压缩零额外 LLM 成本/延迟；代价是摘要质量低（仅前 300 字符），但折叠的是"最老"轮，近期上下文完整保留
+  - **x64dbg 读 API 多线程安全性**：`tool_registry.h` 注明"dispatch 可并发、工具自保证线程安全"；并行 read 依赖此前提，需真机小样本验证不崩（见验收清单）
+- **影响**：
+  - 多只读探查从串行压成并发（上限 4），明显提速
+  - 长会话不再撞窗口 400；超阈值自动折叠最老轮
+  - 缓解 **N-05**（token 预算）：现在有自动压缩兜底，不必每次靠用户确认 token
+  - 工具数 / 体积基本不变（纯 AgentLoop + config 逻辑）；dp64 11.65MB / dp32 8.57MB
+- **位置**：
+  - `src/ai/agent_loop.cpp`：`estimateTokens` / `providerContextWindow` / `compressOldestRound` + run 入口压缩检查 + 工具执行块 `runOneTool`/并行分支
+  - `src/util/config.{h,cpp}`：`parallelReadEnabled` / `parallelReadMax` / `contextCompressEnabled` / `contextCompressThresholdPct` / `contextCompressKeepRounds`
+
+---
+
 
 ## ⚪ 未支持（设计取舍，不是 bug）
 
@@ -438,9 +476,10 @@
 - 用户可在导入后手动重做关键反汇编 → 自动写新 chunks
 - **K-35 缓解**：auto-RAG 注入会在每次 run 入口按首条问句自动召回当前 session store 里的 chunks（默认开）；但仅"首轮 + 当前 store"，跨项目导入的历史仍不在范围内
 
-### N-05：全局分析强制 token 预算确认
+### N-05：全局分析强制 token 预算确认（K-36 部分缓解）
 - 任何"分析整个模块 / 全部函数"类操作都要求用户先确认估算的 token 数
 - 设计取舍：防止误触烧光额度
+- **K-36 缓解**：AgentLoop 现有上下文压缩兜底（超模型窗口 75% 自动折叠最老整轮），长会话不再硬撞窗口；但这是 agent 运行时的被动压缩，N-05 的"主动全局分析预算确认"仍保留
 
 ### N-06：sub-agent / 子工作流框架不支持（G-2 / S9 后续 决策）
 - 当前 AgentLoop 单上下文单 LLM 会话；不支持父 agent 调子 agent

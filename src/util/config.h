@@ -80,6 +80,26 @@ struct AppConfig {
     // 默认开启、top-K=4。
     bool autoRagInjectEnabled = true;
     int  autoRagTopK          = 4;  // 1-16
+
+    // K-36：agent 编排增强 —— 只读工具并行执行。
+    // 当 LLM 一轮回吐的【一批 tool_calls 全部为 Read 类】时，AgentLoop 用线程池
+    // 并发 dispatch（最多 parallelReadMax 个同时），把多个只读探查从串行压成并行。
+    // 只要该批里有任何一个 DbgControl / Write 工具，整批立即回退串行（保证 confirm
+    // 弹窗顺序 + audit 顺序 + 写副作用时序不被打乱）。
+    // 默认开启、并发上限 4。parallelReadMax<=1 等价于关闭。
+    bool parallelReadEnabled = true;
+    int  parallelReadMax     = 4;   // 同时并发的只读工具数；1=串行；上限 8
+
+    // K-36：agent 编排增强 —— 上下文压缩。
+    // 每轮 streamChat 前，按"字符数/4"粗估当前 messages 的累计 token；
+    // 若超过【当前模型上下文窗口 * contextCompressThresholdPct%】，则把最老的
+    // 若干【整轮】（一条 assistant + 其后紧跟的全部 tool 消息）本地折叠成一条
+    // system 摘要消息（不调 LLM）。整轮折叠保证 assistant↔tool_call_id 配对不被
+    // 拆散（否则 provider 会 400）。system / 最近若干轮 / 末轮永不压缩。
+    // 默认开启、阈值 75%。contextCompressEnabled=false 关闭。
+    bool contextCompressEnabled       = true;
+    int  contextCompressThresholdPct  = 75;  // 占模型窗口百分比触发；10-95
+    int  contextCompressKeepRounds    = 3;   // 末尾保留不压缩的轮数；>=1
 };
 
 class Config {

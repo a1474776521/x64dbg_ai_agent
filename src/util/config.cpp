@@ -142,6 +142,22 @@ void Config::loadLocked()
                  data_.toolRetryEnabled, data_.toolRetryMax,
                  data_.autoRagInjectEnabled, data_.autoRagTopK);
 
+    // K-36：并行 read + 上下文压缩
+    readField(j, "parallel_read_enabled",            data_.parallelReadEnabled);
+    readField(j, "parallel_read_max",                data_.parallelReadMax);
+    readField(j, "context_compress_enabled",         data_.contextCompressEnabled);
+    readField(j, "context_compress_threshold_pct",   data_.contextCompressThresholdPct);
+    readField(j, "context_compress_keep_rounds",     data_.contextCompressKeepRounds);
+    if (data_.parallelReadMax < 1) data_.parallelReadMax = 1;
+    if (data_.parallelReadMax > 8) data_.parallelReadMax = 8;
+    if (data_.contextCompressThresholdPct < 10) data_.contextCompressThresholdPct = 10;
+    if (data_.contextCompressThresholdPct > 95) data_.contextCompressThresholdPct = 95;
+    if (data_.contextCompressKeepRounds   < 1)  data_.contextCompressKeepRounds   = 1;
+    XAI_LOG_INFO("config: K-36 parallel_read={}(max={}) context_compress={}(pct={} keep={})",
+                 data_.parallelReadEnabled, data_.parallelReadMax,
+                 data_.contextCompressEnabled, data_.contextCompressThresholdPct,
+                 data_.contextCompressKeepRounds);
+
     XAI_LOG_INFO("config loaded: provider={}, copilot.api_base={}, deepseek.api_base={}, default_model={}",
                  data_.provider, data_.copilot.apiBase, data_.deepseek.apiBase, data_.defaultModel);
 }

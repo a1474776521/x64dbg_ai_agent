@@ -12,6 +12,41 @@
 
 ---
 
+## 2026-05-29 · K-36：并行 read 后端 + 上下文压缩策略选型
+
+**背景**：K-35 后继续推进 `agent-capability-assessment.md` 的第 4 项（只读工具并行）+ 第 3 项（上下文压缩）。用户明确想做这两个。
+
+**决策一：并行 read 的并发后端**
+- 候选：(A) QtConcurrent 线程池 + 上限 4；(B) std::async 裸并发；(C) 只并行"无 x64dbg 调用的安全子集"
+- **选定 A**：agent_worker.cpp 同目录已用 QtConcurrent、CMake 已链 `Qt5::Concurrent`，零额外依赖；`QThreadPool::setMaxThreadCount` 天然限并发；B 无并发上限控制要手搓；C 收益太小（多数 Read 工具都调 Bridge）
+- 安全前提：`tool_registry.h` 注明"dispatch 可并发、工具自保证线程安全"。x64dbg 读 API 多线程安全性无法从代码 100% 确认 → 用"全 Read 才并行 + 任一非 Read 回退串行"收口，且留真机验收
+
+**决策二：并行的正确性边界**
+- **只并行 dispatch**，回调（onToolReport）+ messages.push_back 留主线程按原序做
+- 理由：cb 最终发 Qt signal 非线程安全；且 tool 消息顺序必须 == tool_calls 顺序才能与 assistant.toolCalls 配对（否则 provider 400）
+- 含 DbgControl/Write 的批次整批串行：confirm 弹窗 / audit / 写副作用必须保时序
+
+**决策三：上下文压缩策略**
+- 候选：(A) 本地截断最老整轮；(B) 调一次 LLM 生成摘要替换；(C) 只删 reasoning + 截断超大 tool 结果
+- **选定 A**：零额外 LLM 成本/延迟；B 每次压缩多一次往返 + 成本 + 延迟；C 压缩力度不足
+- 代价：A 的摘要质量低（本地拼前 300 字符），但折叠对象是"最老"轮，近期上下文完整保留，可接受
+
+**决策四：压缩触发阈值**
+- 候选：(A) 固定 token 绝对值；(B) config 默认关；(C) 按 provider 上下文窗口百分比
+- **选定 C**：不同模型窗口差异大（deepseek 64K vs claude 200K），固定值要么早压要么撞墙；按窗口 75% 自适应。`providerContextWindow(model)` 维护一张窗口表，未知模型保守 32K
+
+**关键正确性点（命门）**：
+- **整轮折叠**是配对正确性的命门：OpenAI/DeepSeek 要求 assistant 每个 tool_call 后紧跟同 id 的 tool 消息；按"消息条数"截断会拆散配对 → 400。按"轮单元"(assistant + 其全部 tool)原子折叠保证成套删/留
+- **lambda 捕获 idx 值**而非 `&tc` 引用循环变量（引用会因循环推进全部指向最后一个 → 悬空）
+
+**代价 / 复盘**：
+- 并行 read 依赖 x64dbg 读 API 线程安全这一未 100% 证实的前提；若真机崩，回退手段 = config `parallel_read_enabled=false`
+- 本地压缩摘要质量低，模型若需要被折叠轮的精确数据须重新调工具（已在摘要文案提示）
+- token 估算用字符/4 粗估，不精确；阈值取 75% 留了缓冲吸收误差
+- 三开关默认开（延续 K-35 用户"默认开"倾向）；并行/压缩都有"回退串行 / 不压缩"的安全退路
+
+---
+
 ## 2026-05-29 · K-35：AgentLoop 编排增强首批选 tool retry + auto-RAG（缓做上下文压缩 / 并行 read）
 
 **背景**：`docs/agent-capability-assessment.md` 评估 agent 处 L2 末/L3 初，ROI 排序候选改进：tool retry / auto-RAG 注入 / 上下文压缩 / 并行 read / plan-execute。需选首批落地。

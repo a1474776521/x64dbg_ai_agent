@@ -31,8 +31,54 @@ namespace {
 bool providerSupportsTools(IChatProvider* p)
 {
     if (!p) return false;
-    // Copilot 上游禁用第三方 tools；DeepSeek 原生支持
-    return p->kind() == ProviderKind::DeepSeek;
+    // DeepSeek 官方 API 原生 function calling
+    if (p->kind() == ProviderKind::DeepSeek) return true;
+    // Copilot 由 modelSupportsToolsViaCopilot() 按模型细判（见下）
+    return false;
+}
+
+// K-40: Copilot proxy 透传 tools 字段到上游模型。策略 = 默认放行 + 已知黑名单。
+//
+// 理由：Copilot 持续上新模型（claude-* / opus-* / gpt-* / o-* / gemini-* 等），
+// 维护白名单注定漏；当前主流大模型基本都支持 OpenAI 风格 function calling。
+// 若上游真不支持，Copilot proxy 会返 HTTP 400 "tools is not supported" 立即可见。
+//
+// 已知不支持 function calling 的少数派（需硬黑）：
+//   - o1-mini（OpenAI 官方约束，tools/stream 受限）
+//   - codex-* 系列（旧 completion-only 模型）
+//   - 任何带 -embedding / -embed 后缀的（虽然 chat 一般不出现，防御性）
+bool modelSupportsToolsViaCopilot(const std::string& model)
+{
+    if (model.empty()) return false;
+    std::string m = model;
+    std::transform(m.begin(), m.end(), m.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    static const char* kBlacklist[] = {
+        "o1-mini",      // OpenAI o1-mini：不支持 tools
+        "codex",        // 旧 codex 系
+        "embedding",    // 防御性
+        "embed",        // 防御性
+        "davinci",      // 旧 completion 模型
+        "babbage",
+        "curie",
+        "ada",
+    };
+    for (const char* kw : kBlacklist) {
+        if (m.find(kw) != std::string::npos) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool resolvedSupportsTools(IChatProvider* p, const std::string& effectiveModel)
+{
+    if (!p) return false;
+    if (p->kind() == ProviderKind::DeepSeek) return true;
+    if (p->kind() == ProviderKind::Copilot) {
+        return modelSupportsToolsViaCopilot(effectiveModel);
+    }
+    return false;
 }
 
 std::string argsDigest(const std::string& argsJson, std::size_t maxLen = 200)
@@ -255,7 +301,12 @@ int AgentLoop::run(AgentRunRequest&         req,
     }
 
     auto& registry = ToolRegistry::instance();
-    const bool useTools = providerSupportsTools(req.provider);
+    // K-40: 把"是否启用 tools"决策推迟到知道 effective model 之后
+    const std::string effectiveModel =
+        req.model.empty() ? req.provider->defaultModel() : req.model;
+    const bool useTools = resolvedSupportsTools(req.provider, effectiveModel);
+    XAI_LOG_INFO("AgentLoop: provider={} model={} useTools={}",
+                 static_cast<int>(req.provider->kind()), effectiveModel, useTools);
 
     const auto& appCfg = Config::instance().get();
 

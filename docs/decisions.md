@@ -12,6 +12,49 @@
 
 ---
 
+## 2026-06-03 · K-40：Copilot 多轮 function calling 解禁 + 默认放行/黑名单策略选型
+
+**背景**：features.md 一直把 Copilot 标 "⚠️ 不稳定 / 降级单轮"。读 `agent_loop.cpp:31` 发现真因：`providerSupportsTools` 一刀切只判 ProviderKind，Copilot 永远 false → AgentLoop 直接清空 `req.tools` 调一轮就走。同时 `CopilotChatClient::streamChat` 也压根没拼 `tools` 字段、没解 SSE `tool_calls` 增量。
+
+opencode 等同类客户端能跑通的原因：Copilot proxy 实际是 OpenAI 兼容代理，按 `https://api.githubcopilot.com/chat/completions` 的 OpenAI schema 透传 `tools` 字段到上游模型（GPT-4o / Claude / Opus / Gemini），上游模型原生 function calling 后 proxy 把结果转回 OpenAI `tool_calls` 格式回吐。Claude 4.x（含 opus-4.7）原生 tool_use，质量好。
+
+**Fix 1 端点支持**（无权衡）：完整复用 DeepSeek client 的 tools / tool_calls 收发模板移植到 Copilot client（流式 + 非流式 + 防御兜底，共 ~130 行新增）。
+
+**Fix 2 启用策略**（三选一）：
+- **A. 默认放行 + 已知黑名单**：Copilot provider 默认 useTools=true，仅排除 `o1-mini`/`codex`/老 completion 系等少数确定不支持的；未来 Copilot 上新模型零代码改动
+- **B. 白名单子串匹配**：硬编码 `kSupported = ["claude", "opus", "gpt-4o", "gpt-4.1", "gpt-5", "o1-preview", "o3", ...]`，新模型每次都需补
+- **C. 用户可配置**：config.json 加两个 array `copilot_tools_blacklist` / `whitelist` + 一个全局 enable 开关；用户运行期可调
+
+**选定 A**：
+- Copilot 上新模型节奏极快（半年内见过 claude-4.x / opus-4.7 / o3 / o4-mini / gemini-2.x 等），白名单注定漏
+- 大模型 fc 实际是行业标配，"不支持"才是少数派
+- 即使误放行，Copilot proxy 会返 HTTP 400 含明确文案（`"tools is not supported"`），错误卡片立即可见，**不会沉默吞 tools 当无 tools 模式跑**——失败可观测是关键
+- 黑名单内容变化极慢（OpenAI 历年只 codex 系 / o1-mini 两类明确不支持；老 davinci/babbage/curie/ada/embedding 防御性加入）
+- B 工程上不可持续；C 把锅甩给用户配置，违背"默认能用"原则
+
+**黑名单当前 8 项**：
+```
+o1-mini    （OpenAI 官方约束 tools/stream 受限）
+codex      （旧 completion-only 模型）
+embedding  embed   （防御性，chat 一般不出现）
+davinci  babbage  curie  ada   （旧 GPT-3 系 completion 模型）
+```
+全部走子串匹配（lower-case），避免精确匹配错过版本变体。
+
+**观测点**：
+- `XAI_LOG_INFO("AgentLoop: provider={} model={} useTools={}", ...)` 每次 run 入口写一行
+- ToolCallCard 出现 = function calling 正常；不出 = 上游真返了纯 content（极少数）
+
+**不动 ChatRequest/ChatResponse 数据类**：Copilot 完全沿用现有 DeepSeek 那套 ToolCall / ChatMessage.toolCalls / .toolCallId / .toolName 字段，零侵入。
+
+**实测**：claude-opus-4.7 已跑通 110+ 轮 read_memory/disasm_at agent loop（plugin.log 计数 19904–20113 行）。
+
+**未来扩展点**：
+- 若 Copilot 上某个新模型确认不支持但用户不愿改代码，可二期加 C 方案的 config 开关（成本极低）
+- DeepSeek 端不影响（独立 if 分支提前 return true）
+
+---
+
 ## 2026-05-29 · K-39：系统侧 5 工具（fs_read/write/create + shell_cmd/shell_pwsh）安全模型五连选
 
 **背景**：Agent 当前 76 工具全围绕 x64dbg SDK，缺通用"读项目源码 / 写报告 / 跑外部脚本"能力。用户需求是让 LLM 能：(1) 读样本附带的中文 README/反外挂技术文档；(2) 把分析结论写成 .md 报告；(3) 跑临时 PowerShell 取系统信息辅助分析（比如 `Get-Process` 看 x64dbg 自身环境）。

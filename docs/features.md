@@ -15,6 +15,7 @@
 - **凭据存储**：`%APPDATA%\x64dbg-ai-plugin\secrets\copilot_oauth_token.bin`（DPAPI 加密）
 - **Token 刷新**：每次请求前用 long-lived OAuth token 换 short-lived chat token，自动缓存到过期
 - **TLS 校验**：libcurl 启用 `CURLSSLOPT_NO_REVOKE`（部分企业网无法访问 CRL 服务器）
+- **Function calling（K-40）**：`CopilotChatClient::streamChat` 透传 OpenAI 风格 `tools`/`tool_choice`，SSE 解 `tool_calls` 增量按 `index` 拼装 `id/name/arguments` 分片，assistant 回填 `tool_calls`、tool 消息携带 `tool_call_id`，全套与 DeepSeek client 对称。默认放行所有模型走多轮 agent，仅排除黑名单（`o1-mini`/`codex-*`/`davinci`/`babbage`/`curie`/`ada`/`embedding`/`embed` 子串匹配）。详见 §11 Provider 兼容 + `decisions.md 2026-06-03 · K-40`
 
 ### 1.2 DeepSeek（M3.3）
 
@@ -55,7 +56,8 @@
 4. 完成后整段对话（含 tool 消息）持久化到当前会话
 
 ### 退化路径
-- 预设关掉所有工具或 provider 不支持 function calling（Copilot 自动降级）→ 单轮 streamChat，行为等同 M3 老版本
+- 预设关掉所有工具，或所选模型命中 Copilot 黑名单（`o1-mini`/`codex-*`/老 completion 系，详见 §11 Provider 兼容 + K-40）→ 单轮 streamChat，行为等同 M3 老版本
+- 注：K-40 之前 Copilot 整 provider 强制走此降级路径，现已解禁默认多轮
 - 老 `AI 分析当前地址` 的固定 system prompt 已迁移到出厂预设「分析当前指令」
 
 ---
@@ -430,6 +432,17 @@ ToolPolicy 是「**所有写都需 confirm + audit**」的横切护栏；K-30 �
 
 ### Agent loop
 
+> **编排增强能力地图**（`agent-capability-assessment.md §7` 原 ROI #1-#4 已全部落地，编号被前序工作占用，实际映射如下）：
+>
+> | 原 ROI 编号 | 能力 | 落地编号 | 配置开关 |
+> |---|---|---|---|
+> | #1 | 失败工具自动 retry（仅瞬时错误 + 仅非 Write） | **K-35** | `tool_retry_enabled` / `tool_retry_max` |
+> | #2 | RAG agent 路径自动注入（run 入口 embed+searchSimilar 召回 chunks 注入 system） | **K-35** | `auto_rag_inject_enabled` / `auto_rag_top_k` |
+> | #3 | 上下文压缩（超模型窗口 75% 折叠最老整轮为本地 system 摘要） | **K-36** | `context_compress_enabled` / `context_compress_threshold_pct` / `context_compress_keep_rounds` |
+> | #4 | 只读工具并行（全 Read 批 QtConcurrent 并发，含 DbgControl/Write 回退串行） | **K-36** | `parallel_read_enabled` / `parallel_read_max` |
+>
+> 后续 K-37 / K-38 是上述两批的稳定性 bugfix（DbgControl 误重试、UTF-8 截断），K-39 是系统侧工具新增，K-40 是 Copilot provider 多轮 fc 解禁。
+
 - `AgentLoop.run` 同步阻塞循环；外层 `AgentWorker` 用 `QtConcurrent::run` 跑后台线程
 - 每轮 `provider.streamChat(messages, tools)`：
   - 文本增量 → 助手气泡
@@ -444,14 +457,15 @@ ToolPolicy 是「**所有写都需 confirm + audit**」的横切护栏；K-30 �
 - **K-37 retry/confirm/timeout 三项收紧**：(1) `isToolRetryable` 增加 `cat != DbgControl` 判断，6 个 DbgControl 工具（run_continue / step_into / step_over / step_out / set_breakpoint / delete_breakpoint）从此不再 retry，避免一次单步指令被网络抖动放大成多次；(2) 写工具 confirm 倒计时 5s → 3s；(3) `run_continue` 单次等待 timeout cap 60s → 300s（仍受全局 `max_iter` 控制）
 - **K-38 UTF-8 截断 bug 修复**：`compressOldestRound` 用 `std::string::substr` 按字节切，命中中文/emoji 多字节序列尾巴时产生残缺字节，被 nlohmann::json dump 抛 `type_error.316: invalid UTF-8 byte 0xE2`，整轮回包丢失。修：新增 `safeUtf8Truncate`（向后退到完整码点边界）+ `sanitizeUtf8`（保留 ASCII + 完整多字节，残缺替换为 U+FFFD）；`run()` 在 `creq.messages` 赋值后再扫一遍兜底
 - **K-39 系统工具（5 个）**：在原 76 个 + Agent 体系外新增 group=`system` 工具组——`fs_read_file`（文本读，utf-8/gbk/auto，默认 256 KB，cap 4 MB）/ `fs_write_file`（覆盖写，默认 overwrite_existing=true）/ `fs_create_file`（仅新建）/ `shell_cmd`（cmd.exe /c，GetACP 解码）/ `shell_pwsh`（pwsh 优先 fallback powershell，注入 UTF-8 输出编码）。安全模型：(a) **路径白名单**`fs_allowed_dirs` 默认 `[{plugin_workdir}, {plugin_temp}, {debuggee_dir}]`，支持 `{plugin_workdir}` / `{plugin_temp}` / `{debuggee_dir}` / `{user_home}` 4 个占位符；拒绝原始 `..`、UNC `\\?\` / `\\.\`、reparse point、保留设备名（NUL/CON/PRN/AUX/COM1-9/LPT1-9），前缀匹配大小写不敏感；(b) Shell 用 CreateProcessW + JobObject `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 防子进程逃跑，stdin 关闭，stdout/stderr 各一条 anonymous pipe 由独立读线程喂；(c) 超时/输出大小全配置化（`shell_timeout_ms_default/cap` 默认 30s / cap 300s；`shell_stdout_max_bytes_default/cap` 256 KB / 4 MB）；(d) 4 写工具加入 `confirmHardEnforced`，**永不**被 auto-approve 豁免；(e) `EventBus::DbgEvent` 新增 `ShellStarted=7 / ShellFinished=8 / ShellTimeout=9` 三事件，payload.raw=完整命令行，payload.addr=pid（cmd_hash 待定）；(f) UTF-8 helper 抽到 `src/util/utf8_safe.h`，K-38 与 K-39 共享
+- **K-40 Copilot 多轮 function calling 解禁**：原 `providerSupportsTools` 一刀切只 DeepSeek 走多轮，Copilot 永远降级单轮（features.md 历史标 "⚠️ 不稳定"）。本批两步打通：(1) `CopilotChatClient::streamChat` 补齐 OpenAI 风格 `tools`/`tool_choice` 请求拼接 + assistant 携带 `tool_calls` 字段 + role=tool 携带 `tool_call_id` + 流式 SSE `tool_calls` 增量按 `index` 分组拼装（id/name/arguments 分片到达）+ 非流式 `tool_calls` 一次性解析 + 防御性"连接断早了"末尾兜底回吐（完全复用 DeepSeek client 30 行模板）；(2) `agent_loop.cpp` 新增 `modelSupportsToolsViaCopilot(model)`，**策略 = 默认放行 + 黑名单**（黑：`o1-mini` / `codex` / `embedding` / `embed` / `davinci` / `babbage` / `curie` / `ada`），未来 Copilot 新增任意模型自动享受；启动日志 `AgentLoop: provider=N model=X useTools=true/false` 可观测。实测 `claude-opus-4.7` 完整跑通 110+ 轮 read_memory/disasm_at agent loop；`claude-3.5/3.7-sonnet` / `gpt-4o` / `gpt-4.1` / `o3-mini` / `o4-mini` / `gemini-*` 全部自动放行，若上游真不支持会返 HTTP 400 错误卡片立即可见（不会沉默吞 tools）
 - 安全上限：`max_iter = 20`（预设可调，1–50）；每工具 64 KB 硬截断；写类工具本批未开放
 - 全部工具调用进 `plugin.log`
 
 ### Provider 兼容
 | Provider | function calling | 行为 |
 |---|---|---|
-| DeepSeek | ✅ | 真正多轮 agent；reasoner 思考链通过 reasoning_content 通道 |
-| Copilot | ⚠️ 不稳定 | `AgentLoop` 内部用空 tools 列表降级单轮 |
+| DeepSeek | ✅ 原生 | 真正多轮 agent；reasoner 思考链通过 reasoning_content 通道 |
+| Copilot | ✅ 默认放行 + 黑名单（K-40） | `CopilotChatClient` 透传 OpenAI 风格 `tools`/`tool_choice`，SSE 解 `tool_calls` 增量；除 `o1-mini`/`codex-*`/老 completion 模型（davinci/babbage/curie/ada/embedding/embed）外全部启用多轮；实测 `claude-opus-4.7` 完整跑通 read_memory 等链路 |
 
 ### UI 反馈
 - **ToolCallCard**（`src/ui/tool_call_card.cpp`）：每个 tool_call 一张折叠卡片

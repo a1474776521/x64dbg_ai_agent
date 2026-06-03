@@ -268,15 +268,27 @@ if (preset.autoRagInject && !messages.lastUserText().empty()) {
 
 ## 8. 下批迭代建议路线
 
-按 ROI 排序逐项做，K-33 ~ K-37 占位：
+### 8.1 ROI #1-#4 落地映射（已完成）
 
-- **K-33**：失败工具自动 retry（#1）—— 1 个 PR，1-2 天
-- **K-34**：RAG agent 路径自动注入（#2）—— 1 个 PR，2-3 天
-- **K-35**：上下文压缩（#3）—— 1 个 PR，3-5 天
-- **K-36**：只读工具并行（#4）—— 1 个 PR，3-4 天
-- **K-37**：Plan-Execute 模式（#5）—— 多 PR，1-2 周
+| 原 ROI 编号 | 能力 | 原占位编号 | **实际落地编号** | 状态 |
+|---|---|---|---|---|
+| #1 | 失败工具自动 retry | K-33 占位 | **K-35**（retry 非 Write + 退避，K-37 再排除 DbgControl）| ✅ |
+| #2 | RAG agent 路径自动注入 | K-34 占位 | **K-35**（run 入口 embed+searchSimilar 注入 system，默认 top_k=4）| ✅ |
+| #3 | 上下文压缩 | K-35 占位 | **K-36**（超模型窗口 75% 折叠最老整轮为本地 system 摘要，K-38 修 UTF-8 截断）| ✅ |
+| #4 | 只读工具并行 | K-36 占位 | **K-36**（全 Read 批 QtConcurrent 并发上限 4，含非 Read 回退串行）| ✅ |
+| #5 | Plan-Execute 模式 | K-37 占位 | 仍未做 | ⏸ |
 
-预期完成 K-33 + K-34 + K-35 后，agent 等级从「L2 末/L3 初」推进到「L3 末」；做完 K-37 进入「L4 初」。
+> 编号被前序工作占用的真实原因：开发节奏中 K-33 被「confirm 豁免 + Ctrl+Enter」吃掉、K-34 被「malware-triage 升级（scan_strings + analyze_pe_header + ATT&CK）」吃掉，编排增强从 K-35 才正式开做。详见 `decisions.md 2026-05-28 K-33/K-34`、`docs/features.md §11 Agent loop 能力地图`。
+
+### 8.2 后续候选（按当前优先级）
+
+- **K-40** Copilot 多轮 fc 解禁 ✅ 已完成（2026-06-03，本批，详见 `decisions.md 2026-06-03 K-40` + `features.md §11 Provider 兼容`）
+- **Plan-Execute 模式（原 #5）**：多 PR，1-2 周；当前 ROI 低于以下两项，可放后
+- **样本端到端冒烟**：用 `samples/login_demo/{plain,xor,antidbg}` 跑完整 agent 逆向流程做回归
+- **`analyze_module` 独立 ITool**：替换 K-39 用 `extra_dbg_cmd_whitelist` 加的 6 个 anal 族 token
+- **剩余系统工具**：fs_list_dir / fs_hash / proc_list 等
+
+> agent 等级：完成 ROI #1-#4（K-35/K-36）后已推进到「L3 末」；K-40 解禁 Copilot 多模型后用户体感等同 L3 末；做完 Plan-Execute 才进「L4 初」。
 
 ---
 
@@ -285,3 +297,5 @@ if (preset.autoRagInject && !messages.lastUserText().empty()) {
 | 日期 | 版本 | 变更 |
 |---|---|---|
 | 2026-05-28 | 1.0 | 首次评估，基于 K-32 完成态代码 |
+| 2026-05-29 | 1.1 | K-35/K-36 编排增强落地（ROI #1-#4），顶部加「落地进度」块 |
+| 2026-06-03 | 1.2 | §8 重写为「ROI 落地映射表」+ 新增 §8.2 后续候选；K-40 Copilot 多轮 fc 解禁记入 |

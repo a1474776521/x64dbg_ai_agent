@@ -174,7 +174,7 @@ std::vector<AgentPreset> defaultPresets()
             // S5：脚本
             "list_scripts","load_script","run_script_file",
             // S6-A：调试导航
-            "run_continue","pause_debug","step_out",
+            "get_debug_state","run_continue","pause_debug","step_out",
             // S6-B/C：标签注释（沉淀分析结论）
             "set_label","get_label","list_labels",
             "set_comment","get_comment","list_comments",
@@ -406,7 +406,7 @@ std::vector<AgentPreset> defaultPresets()
             "set_comment","get_comment",
             // 试验：先暂停再翻转标志
             "set_breakpoint","remove_breakpoint","step_in","step_over","run_until",
-            "run_continue","pause_debug",
+            "get_debug_state","run_continue","pause_debug",
             "set_flag",
             // 持久化补丁
             "assemble_at","pattern_replace","patch_memory",
@@ -484,7 +484,7 @@ std::vector<AgentPreset> defaultPresets()
             // 控制
             "set_breakpoint","remove_breakpoint","set_hw_breakpoint","remove_hw_breakpoint",
             "set_conditional_bp",
-            "step_in","step_over","step_out","run_until","run_continue","pause_debug",
+            "step_in","step_over","step_out","run_until","get_debug_state","run_continue","pause_debug",
             // 写
             "assemble_at","pattern_replace","patch_memory","set_register","set_flag",
             // 审计
@@ -550,7 +550,7 @@ std::vector<AgentPreset> defaultPresets()
             "list_modules","eval_expression",
             "assemble_at","patch_memory","pattern_replace",
             "set_breakpoint","remove_breakpoint","step_in","step_over","run_until",
-            "run_continue","pause_debug",
+            "get_debug_state","run_continue","pause_debug",
             "set_comment","get_comment",
             "gui_focus_disasm","gui_focus_dump"
         };
@@ -585,7 +585,7 @@ std::vector<AgentPreset> defaultPresets()
         p.enabledTools = {
             "set_hw_breakpoint","remove_hw_breakpoint",
             "set_breakpoint","remove_breakpoint","list_breakpoints",
-            "run_continue","pause_debug","wait_for_event","step_in","step_over","run_until",
+            "get_debug_state","run_continue","pause_debug","wait_for_event","step_in","step_over","run_until",
             "get_registers","get_disasm","read_memory","read_string",
             "find_xrefs_to","get_function_range","get_callstack",
             "format_with_dbg","eval_expression","list_modules",
@@ -809,7 +809,7 @@ std::vector<AgentPreset> defaultPresets()
             "set_hw_breakpoint","remove_hw_breakpoint",
             "set_breakpoint","remove_breakpoint","list_breakpoints",
             // 控制
-            "run_continue","pause_debug","wait_for_event",
+            "get_debug_state","run_continue","pause_debug","wait_for_event",
             "step_in","step_over","step_out","run_until",
             // S8-D 栈观察 (恢复 pushad 上下文)
             "stack_peek",

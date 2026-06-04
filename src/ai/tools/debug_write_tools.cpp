@@ -528,7 +528,17 @@ public:
             return r;
         }
         if (!DbgCmdExecDirect(cmd.c_str())) {
-            r.ok = false; r.error = "DbgCmdExecDirect failed for: " + cmd; return r;
+            // K-42: 大多数失败是状态不匹配（如已 running 时执行 "run"，已 paused 时
+            // 执行 "pause"）。把当前状态塞进 error，agent 看了能自我纠正，免得再瞎试。
+            const char* st = DbgIsDebugging()
+                                 ? (DbgIsRunning() ? "running" : "paused")
+                                 : "not_debugging";
+            r.ok = false;
+            r.error = std::string("DbgCmdExecDirect failed for: ") + cmd
+                      + " (current_state=" + st
+                      + "; if state-sensitive, call get_debug_state first)";
+            r.data = {{"command", cmd}, {"current_state", st}};
+            return r;
         }
         r.ok = true;
         r.data = {{"command", cmd}, {"executed", true}};

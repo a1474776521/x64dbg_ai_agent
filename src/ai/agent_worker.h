@@ -26,6 +26,8 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
+#include <vector>
 
 namespace x64ai {
 
@@ -44,6 +46,16 @@ public:
 
     bool isRunning() const { return running_.load(); }
 
+    // K-41b: 取走 agent 跑完后内存里的最终对话（含 assistant.tool_calls + tool.toolCallId
+    // 配对结构，可直接喂给下一次 AgentRunRequest.messages 实现续跑）。
+    //
+    // 调用时机：在 maxIterReached / finished signal 处理槽里调（此刻 worker 后台线程
+    // 已经把 snapshot 填好，且 panel 在主线程读，由内部 mutex 保护跨线程访问）。
+    // 调用后 snapshot 被 move 走，再次调返回空。
+    //
+    // 用途：K-41d 续跑按钮（"继续推理 +10 轮"）；其它路径无需关心。
+    std::vector<ChatMessage> takeSnapshotMessages();
+
 signals:
     // assistant 流式 token
     void assistantDelta(QString delta);
@@ -51,7 +63,13 @@ signals:
     void assistantReasoningDelta(QString delta);
     // 一轮 assistant 消息（含完整 content + toolCalls）收尾
     // toolCallNames 用于 UI 立刻新建对应卡片（pending 状态）
-    void assistantMessage(QString content, QStringList toolCallIds, QStringList toolCallNames);
+    // K-41b: 新增 toolCallsJson，OpenAI 标准 tool_calls JSON 数组字符串
+    //        （形如 `[{"id":"call_x","type":"function","function":{"name":"...","arguments":"..."}}]`），
+    //        无工具调用时为空串。用于 K-41c 持久化到 messages.tool_calls 列。
+    void assistantMessage(QString content,
+                          QStringList toolCallIds,
+                          QStringList toolCallNames,
+                          QString toolCallsJson);
     // 单个 tool_call 开始（实际 dispatch 前的瞬时通知；与 assistantMessage 顺序保证）
     void toolCallStarted(QString id, QString name, QString argsJson);
     // 单个 tool_call 完成
@@ -82,6 +100,12 @@ private:
     std::atomic<bool>  running_{false};
     // cancel 用 shared_ptr 共享给后台 lambda，便于 worker 提前析构也安全
     std::shared_ptr<std::atomic<bool>> cancel_;
+
+    // K-41b: agent 跑完后的最终对话副本（含 tool_calls 配对结构），
+    // 后台线程在 onMaxIterReached / onDone 时填充，主线程通过
+    // takeSnapshotMessages() 拿走，mutex 保护跨线程访问。
+    mutable std::mutex       snapshotMtx_;
+    std::vector<ChatMessage> snapshotMessages_;
 };
 
 }  // namespace x64ai

@@ -9,11 +9,36 @@
 #include "util/logging.h"
 
 #include <bridgemain.h>
+#include <nlohmann/json.hpp>
 
 #include <QPointer>
 #include <QtConcurrent/QtConcurrent>
 
 namespace x64ai {
+
+namespace {
+
+// K-41b: 把内存中的 vector<ToolCall> 序列化为 OpenAI 标准 tool_calls JSON 数组。
+// 格式：[{"id":"call_x","type":"function","function":{"name":"...","arguments":"..."}}, ...]
+// 用途：写入 SessionStore.messages.tool_calls 列（K-41c），供续跑时反序列化重建 ChatMessage。
+// 与 deepseek_chat_client.cpp:151-163 / copilot_chat_client.cpp 同款 K-40 协议一致。
+std::string serializeToolCallsJson(const std::vector<ToolCall>& calls) {
+    if (calls.empty()) return std::string();
+    nlohmann::json arr = nlohmann::json::array();
+    for (const auto& tc : calls) {
+        arr.push_back({
+            {"id",   tc.id},
+            {"type", "function"},
+            {"function", {
+                {"name",      tc.name},
+                {"arguments", tc.argumentsJson},
+            }},
+        });
+    }
+    return arr.dump();
+}
+
+}  // namespace
 
 AgentWorker::AgentWorker(QObject* parent)
     : QObject(parent),
@@ -29,6 +54,12 @@ AgentWorker::~AgentWorker()
 void AgentWorker::requestCancel()
 {
     if (cancel_) cancel_->store(true);
+}
+
+std::vector<ChatMessage> AgentWorker::takeSnapshotMessages()
+{
+    std::lock_guard<std::mutex> lk(snapshotMtx_);
+    return std::move(snapshotMessages_);
 }
 
 void AgentWorker::start(AgentRunRequest req)
@@ -50,7 +81,6 @@ void AgentWorker::start(AgentRunRequest req)
         ctx.targetSha      = ProjectContext::instance().projectId();
         ctx.debuggerActive = DbgIsDebugging();
         ctx.cancelFlag     = cancel.get();  // S2-D：让工具内阻塞循环能响应用户取消
-
         // S3-D：注入跨线程模态 confirm 回调。dispatch 在工具线程调用本 lambda 时，
         // ToolConfirmDialog 内部会 BlockingQueuedConnection 切回 GUI 线程。
         ctx.confirmCallback = [](const std::string& toolName,
@@ -88,9 +118,12 @@ void AgentWorker::start(AgentRunRequest req)
                 ids   << QString::fromStdString(tc.id);
                 names << QString::fromStdString(tc.name);
             }
+            // K-41b: 同时把 tool_calls 序列化成 OpenAI JSON 数组字符串带给 panel，
+            // 供 K-41c 持久化到 SessionStore.messages.tool_calls 列。
+            QString toolCallsJson = QString::fromStdString(serializeToolCallsJson(m.toolCalls));
             QMetaObject::invokeMethod(self.data(),
-                [self, content, ids, names]() {
-                    if (self) emit self->assistantMessage(content, ids, names);
+                [self, content, ids, names, toolCallsJson]() {
+                    if (self) emit self->assistantMessage(content, ids, names, toolCallsJson);
                 },
                 Qt::QueuedConnection);
         };
@@ -119,8 +152,13 @@ void AgentWorker::start(AgentRunRequest req)
                 [self, s]() { if (self) emit self->failed(s); },
                 Qt::QueuedConnection);
         };
-        cb.onMaxIterReached = [self](int it, int pending) {
+        cb.onMaxIterReached = [self, &req](int it, int pending) {
             if (!self) return;
+            // K-41b: 拷贝最终 req.messages 到 snapshot，供 panel 续跑取走
+            {
+                std::lock_guard<std::mutex> lk(self->snapshotMtx_);
+                self->snapshotMessages_ = req.messages;
+            }
             QMetaObject::invokeMethod(self.data(),
                 [self, it, pending]() {
                     if (self) emit self->maxIterReached(it, pending);
@@ -153,8 +191,12 @@ void AgentWorker::start(AgentRunRequest req)
                 },
                 Qt::QueuedConnection);
         };
-        cb.onDone = [self]() {
+        cb.onDone = [self, &req]() {
             if (!self) return;
+            // K-41b: agent 正常完成（最后一轮无 tool_calls）时也填 snapshot，
+            // 允许用户在已完成会话继续追问/再调工具。
+            std::lock_guard<std::mutex> lk(self->snapshotMtx_);
+            self->snapshotMessages_ = req.messages;
             // 不在这里 emit finished —— iters 此时尚未返回；
             // 统一在 AgentLoop::run 返回后 emit finished(iters)。
         };

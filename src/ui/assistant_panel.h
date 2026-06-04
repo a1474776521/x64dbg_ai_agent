@@ -13,6 +13,8 @@
 #include <string>
 #include <vector>
 
+#include "ai/agent_loop.h"  // K-41d: continueAgentFromSnapshot 签名需要 ChatMessage 完整类型
+
 class QComboBox;
 class QLabel;
 class QPushButton;
@@ -111,6 +113,21 @@ private:
     void wireAgentWorker(AgentWorker* w,
                          int64_t sessionId,
                          const std::string& presetId);
+
+    // K-41d: agent 达到 maxIter 后的"继续推理 +N 轮"按钮回调走这里。
+    // 关键差异（对比 runAgentWithPreset）：
+    //   - 不抓 disasm 上下文 / 不渲染 preset.userTemplate
+    //   - 不 append 任何 user 消息（既不 UI 也不入库）
+    //   - messages 直接用 worker 上一轮跑完时的 snapshot（含完整 tool/tool_calls
+    //     配对结构），保证 LLM 看见的是断点前的真实历史
+    //   - 仍按 presetId 重 lookup provider/model/tools（用户可能切了模型/工具白名单）
+    //   - 复用同一 sessionId，新一轮 assistant/tool 消息继续追加到同会话
+    //   - 在 chat 视图 appendAssistantHeader 让 delta 有 stream 目标，但不重渲染 user 卡片
+    // 调用时机仅限 maxIterReached signal 的主线程槽内，确保 snapshot 已 ready。
+    void continueAgentFromSnapshot(const std::string&       presetId,
+                                   int64_t                  sessionId,
+                                   std::vector<ChatMessage> snapshot,
+                                   int                      extraIter);
 
     void refreshSessionPanel();
 

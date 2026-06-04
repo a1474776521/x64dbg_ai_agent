@@ -329,7 +329,13 @@ void HistoryDialog::onImportClicked() {
     }
     int copied = 0;
     for (const auto& m : msgs) {
-        if (store->appendMessage(newId, m.role, m.content) > 0) ++copied;
+        // K-41c: 复制会话时带上 tool_call_id / tool_name / tool_calls 三列，
+        // 否则跨项目导入后续跑 agent 会因 tool 消息缺 tool_call_id 配对而报 400。
+        // 老 source 库（没新列）拿到的 MessageRow 三字段已是空默认值，等价于老行为。
+        if (store->appendMessageEx(newId, m.role, m.content,
+                                   m.toolCallId, m.toolName, m.toolCalls) > 0) {
+            ++copied;
+        }
     }
     XAI_LOG_INFO("imported {} msgs from {} session {} -> active session {}",
                  copied, srcDb.string(), currentSessionId_, newId);

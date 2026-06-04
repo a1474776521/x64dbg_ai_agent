@@ -176,27 +176,46 @@ std::vector<MessageRow> ProjectBrowser::listMessages(const fs::path& dbPath,
     if (!db) return out;
 
     sqlite3_stmt* st = nullptr;
-    const char* sql =
+    // K-41c: 优先按新 schema 读 8 列（含 tool_call_id / tool_name / tool_calls）；
+    // 老库（缺新列）prepare 会失败，自动 fallback 读 5 列，三个扩展字段保持空默认值。
+    const char* sqlNew =
+        "SELECT id,session_id,role,content,created_at,"
+        "tool_call_id,tool_name,tool_calls FROM messages "
+        "WHERE session_id=? ORDER BY id ASC;";
+    const char* sqlOld =
         "SELECT id,session_id,role,content,created_at FROM messages "
         "WHERE session_id=? ORDER BY id ASC;";
-    if (sqlite3_prepare_v2(db, sql, -1, &st, nullptr) == SQLITE_OK) {
-        sqlite3_bind_int64(st, 1, sessionId);
-        while (sqlite3_step(st) == SQLITE_ROW) {
-            MessageRow r;
-            r.id         = sqlite3_column_int64(st, 0);
-            r.sessionId  = sqlite3_column_int64(st, 1);
-            const auto* role    = sqlite3_column_text(st, 2);
-            const auto* content = sqlite3_column_text(st, 3);
-            r.role       = role    ? reinterpret_cast<const char*>(role)    : "";
-            r.content    = content ? reinterpret_cast<const char*>(content) : "";
-            r.createdAt  = sqlite3_column_int64(st, 4);
-            out.push_back(std::move(r));
+    bool newSchema = true;
+    if (sqlite3_prepare_v2(db, sqlNew, -1, &st, nullptr) != SQLITE_OK) {
+        newSchema = false;
+        if (sqlite3_prepare_v2(db, sqlOld, -1, &st, nullptr) != SQLITE_OK) {
+            XAI_LOG_WARN("ProjectBrowser listMessages prepare failed: {}",
+                         sqlite3_errmsg(db));
+            sqlite3_close(db);
+            return out;
         }
-        sqlite3_finalize(st);
-    } else {
-        XAI_LOG_WARN("ProjectBrowser listMessages prepare failed: {}",
-                     sqlite3_errmsg(db));
     }
+    sqlite3_bind_int64(st, 1, sessionId);
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        MessageRow r;
+        r.id         = sqlite3_column_int64(st, 0);
+        r.sessionId  = sqlite3_column_int64(st, 1);
+        const auto* role    = sqlite3_column_text(st, 2);
+        const auto* content = sqlite3_column_text(st, 3);
+        r.role       = role    ? reinterpret_cast<const char*>(role)    : "";
+        r.content    = content ? reinterpret_cast<const char*>(content) : "";
+        r.createdAt  = sqlite3_column_int64(st, 4);
+        if (newSchema) {
+            const auto* tci = sqlite3_column_text(st, 5);
+            const auto* tn  = sqlite3_column_text(st, 6);
+            const auto* tcs = sqlite3_column_text(st, 7);
+            r.toolCallId = tci ? reinterpret_cast<const char*>(tci) : "";
+            r.toolName   = tn  ? reinterpret_cast<const char*>(tn)  : "";
+            r.toolCalls  = tcs ? reinterpret_cast<const char*>(tcs) : "";
+        }
+        out.push_back(std::move(r));
+    }
+    sqlite3_finalize(st);
     sqlite3_close(db);
     return out;
 }

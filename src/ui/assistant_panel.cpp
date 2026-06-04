@@ -1155,6 +1155,82 @@ void AssistantPanel::runAgentWithPreset(const std::string& presetId,
     worker->start(std::move(arr));
 }
 
+// K-41d: 续跑入口。最小副作用——仅 1) lookup provider/tools 2) 起新 worker。
+// 不动 UI（不 appendUserMessage / 不 appendInlineButton），只 appendAssistantHeader
+// 让随后的 assistantDelta 有一个新的 assistant 框落字。
+void AssistantPanel::continueAgentFromSnapshot(const std::string&       presetId,
+                                               int64_t                  sessionId,
+                                               std::vector<ChatMessage> snapshot,
+                                               int                      extraIter)
+{
+    if (agentWorker_ && agentWorker_->isRunning()) {
+        chat_->appendSystemNote(QStringLiteral("Agent 正在运行，请先等待或点击取消。"));
+        return;
+    }
+    if (snapshot.empty()) {
+        chat_->appendSystemNote(QStringLiteral("续跑失败：消息快照为空。"));
+        return;
+    }
+    auto presetOpt = PresetStore::instance().findById(presetId);
+    if (!presetOpt) {
+        chat_->appendSystemNote(QStringLiteral("续跑失败：未找到预设 %1。")
+                                    .arg(QString::fromStdString(presetId)));
+        return;
+    }
+    const AgentPreset preset = *presetOpt;
+
+    ProviderKind kind = ProviderManager::instance().currentKind();
+    if (preset.provider == "deepseek") kind = ProviderKind::DeepSeek;
+    else if (preset.provider == "copilot") kind = ProviderKind::Copilot;
+    auto* provider = ProviderManager::get(kind);
+    if (!provider) {
+        chat_->appendSystemNote(QStringLiteral("续跑失败：无法获取 Provider。"));
+        return;
+    }
+
+    std::string model = !preset.model.empty()
+                            ? preset.model
+                            : modelBox_->currentText().trimmed().toStdString();
+    if (model.empty()) model = provider->defaultModel();
+    if (model.empty()) {
+        chat_->appendSystemNote(QStringLiteral("续跑失败：未选择模型。"));
+        return;
+    }
+
+    // tools 白名单按当前 preset.enabledTools 重过滤（用户可能调整过）
+    auto allTools = ToolRegistry::instance().listChatTools();
+    std::vector<ChatTool> tools;
+    if (preset.enabledTools.empty()) {
+        tools = allTools;
+    } else {
+        for (const auto& t : allTools) {
+            for (const auto& name : preset.enabledTools) {
+                if (t.name == name) { tools.push_back(t); break; }
+            }
+        }
+    }
+
+    AgentRunRequest arr;
+    arr.provider    = provider;
+    arr.model       = model;
+    arr.messages    = std::move(snapshot);   // K-41 核心：完整带 tool_calls 配对的快照
+    arr.temperature = preset.temperature;
+    arr.maxIter     = extraIter > 0 ? extraIter : 10;
+    arr.tools       = std::move(tools);
+
+    // UI：仅给 assistant 一个新框，不显示新 user 卡片
+    chat_->appendSystemNote(QStringLiteral("继续推理（+%1 轮）…").arg(arr.maxIter));
+    chat_->appendAssistantHeader();
+
+    auto* worker = new AgentWorker(this);
+    agentWorker_ = worker;
+    agentTerminalEventHandled_ = false;
+    setAgentRunning(true);
+    // 复用同 sessionId + presetId，tool/assistant 消息继续 append 到同会话
+    wireAgentWorker(worker, sessionId, presetId);
+    worker->start(std::move(arr));
+}
+
 void AssistantPanel::wireAgentWorker(AgentWorker* w,
                                      int64_t sessionId,
                                      const std::string& presetId)
@@ -1177,11 +1253,22 @@ void AssistantPanel::wireAgentWorker(AgentWorker* w,
     connect(w, &AgentWorker::assistantMessage, this,
             [view, store, sessionId, accumulated](QString content,
                                                   QStringList ids,
-                                                  QStringList names) {
+                                                  QStringList names,
+                                                  QString toolCallsJson) {
         // 一轮 assistant 收尾：固化气泡
         view->finalizeAssistantMessage();
-        if (store && sessionId > 0 && !accumulated->empty()) {
-            store->appendMessage(sessionId, "assistant", *accumulated);
+        if (store && sessionId > 0 &&
+            (!accumulated->empty() || !toolCallsJson.isEmpty())) {
+            // K-41c: 落盘 assistant 消息 + 本轮 tool_calls JSON。
+            // 关键：模型可能"空 content + 仅调工具"，老条件 `!accumulated->empty()` 会
+            // 漏掉这种消息（tool_calls 跟着丢），后续 tool 消息就成了"孤儿"——续跑时
+            // provider 报 400（assistant.tool_calls 缺失而 role=tool 已存在）。
+            // toolCallsJson 形如 `[{"id":"call_x","type":"function","function":...}]`，
+            // 无工具调用时为空串。toolCallId / toolName 仅 role=tool 时填，这里留空。
+            store->appendMessageEx(sessionId, "assistant", *accumulated,
+                                   /*toolCallId*/ "",
+                                   /*toolName*/   "",
+                                   /*toolCalls*/  toolCallsJson.toStdString());
         }
         accumulated->clear();
 
@@ -1211,10 +1298,16 @@ void AssistantPanel::wireAgentWorker(AgentWorker* w,
             else    card->setError(argsJson, error, elapsedMs);
         }
 
-        // 持久化 tool 消息（供下次装载历史时复现）
+        // K-41c: 持久化 tool 消息，带 tool_call_id + tool_name（OpenAI 协议强约束：
+        // role=tool 必须配对 assistant.tool_calls[i].id，否则 provider 报 400）。
+        // 注意 content 现在直接用 resultJson 裸串（原有 `[tool:NAME] ...` 前缀是给老
+        // 重放 UI 看的人类可读格式；续跑时 LLM 自己看 tool_name + tool_call_id 已够，
+        // 不需要前缀；老 history_dialog 重放走 ProjectBrowser 路径仍可看 content 直读）。
         if (store && sessionId > 0) {
-            std::string body = "[tool:" + name.toStdString() + "] " + resultJson.toStdString();
-            store->appendMessage(sessionId, "tool", body);
+            store->appendMessageEx(sessionId, "tool", resultJson.toStdString(),
+                                   /*toolCallId*/ id.toStdString(),
+                                   /*toolName*/   name.toStdString(),
+                                   /*toolCalls*/  "");
         }
     });
 
@@ -1225,14 +1318,24 @@ void AssistantPanel::wireAgentWorker(AgentWorker* w,
     });
 
     connect(w, &AgentWorker::maxIterReached, this,
-            [this, view, presetId](int iter, int pending) {
+            [this, view, presetId, sessionId, w](int iter, int pending) {
         view->appendSystemNote(
             QStringLiteral("Agent 达到最大迭代 %1，仍有 %2 个待执行工具。")
                 .arg(iter).arg(pending));
+        // K-41d: 把 worker 当下的完整 messages snapshot 取走（含 tool/tool_calls 配对）。
+        // 必须在主线程槽内同步取——此时 worker 后台线程已先填好 snapshot 再 emit signal
+        // (queued connection 的 happens-before 保证可见性)，且 worker 对象尚未 deleteLater。
+        // 取走后用 shared_ptr 包，按钮 lambda 可多次"理论上"重用；实际只点一次。
+        auto snap = std::make_shared<std::vector<ChatMessage>>(
+            w ? w->takeSnapshotMessages() : std::vector<ChatMessage>{});
         view->appendInlineButton(QStringLiteral("继续推理 +10 轮"),
-            [this, presetId]() {
-                // 续跑：重新跑一次同预设（空 userQuery），历史已写入
-                runAgentWithPreset(presetId, QString());
+            [this, presetId, sessionId, snap]() {
+                if (!snap || snap->empty()) {
+                    chat_->appendSystemNote(
+                        QStringLiteral("续跑失败：上一轮快照为空（可能已被消耗）。"));
+                    return;
+                }
+                continueAgentFromSnapshot(presetId, sessionId, *snap, 10);
             });
         agentTerminalEventHandled_ = true;  // K-13
         setAgentRunning(false);

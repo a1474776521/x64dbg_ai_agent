@@ -123,7 +123,11 @@ bool SessionStore::initSchema() {
         "  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,"
         "  role TEXT NOT NULL,"
         "  content TEXT NOT NULL,"
-        "  created_at INTEGER NOT NULL"
+        "  created_at INTEGER NOT NULL,"
+        // K-41a: function calling 续跑用三列（详见 MessageRow 注释）
+        "  tool_call_id TEXT NOT NULL DEFAULT '',"
+        "  tool_name TEXT NOT NULL DEFAULT '',"
+        "  tool_calls TEXT NOT NULL DEFAULT ''"
         ");"
         "CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);"
 
@@ -155,6 +159,36 @@ bool SessionStore::initSchema() {
     if (!execOrLog(db_, vecSql)) {
         XAI_LOG_ERROR("create vec_chunks failed (sqlite-vec not loaded?)");
         return false;
+    }
+
+    // K-41a: 检测老库 messages 表是否缺新列（tool_call_id / tool_name / tool_calls）。
+    // A 方案（删整库）：不自动 migration，仅打 WARN 提示用户手动删除 .db 重启。
+    // 检测到旧 schema 后 appendMessageEx / listMessages 触及新列时 sqlite 会直接返回错误，
+    // function calling agent 续跑会无法工作（普通对话仍能跑）。
+    {
+        sqlite3_stmt* st = nullptr;
+        bool hasToolCallId = false, hasToolName = false, hasToolCalls = false;
+        if (sqlite3_prepare_v2(db_, "PRAGMA table_info(messages);",
+                               -1, &st, nullptr) == SQLITE_OK) {
+            while (sqlite3_step(st) == SQLITE_ROW) {
+                const auto* col = sqlite3_column_text(st, 1);
+                if (!col) continue;
+                std::string name = reinterpret_cast<const char*>(col);
+                if (name == "tool_call_id") hasToolCallId = true;
+                else if (name == "tool_name") hasToolName = true;
+                else if (name == "tool_calls") hasToolCalls = true;
+            }
+            sqlite3_finalize(st);
+        }
+        if (!hasToolCallId || !hasToolName || !hasToolCalls) {
+            XAI_LOG_WARN("SessionStore: messages table missing K-41a columns "
+                         "(tool_call_id={} tool_name={} tool_calls={}). "
+                         "Old DB detected. To enable agent multi-round continuation "
+                         "(\"continue +10 rounds\" button), please close x64dbg and "
+                         "delete %APPDATA%\\x64dbg-ai-plugin\\projects\\{}.db, "
+                         "then restart.",
+                         hasToolCallId, hasToolName, hasToolCalls, projectId_);
+        }
     }
     return true;
 }
@@ -267,18 +301,39 @@ bool SessionStore::deleteSession(int64_t id) {
 int64_t SessionStore::appendMessage(int64_t sessionId,
                                     const std::string& role,
                                     const std::string& content) {
+    // 老 3 参数接口：扩展字段全空委托给 appendMessageEx
+    return appendMessageEx(sessionId, role, content,
+                           /*toolCallId*/ "", /*toolName*/ "", /*toolCalls*/ "");
+}
+
+int64_t SessionStore::appendMessageEx(int64_t sessionId,
+                                      const std::string& role,
+                                      const std::string& content,
+                                      const std::string& toolCallId,
+                                      const std::string& toolName,
+                                      const std::string& toolCalls) {
     if (!db_) return 0;
     std::lock_guard<std::mutex> lk(mtx_);
 
     sqlite3_stmt* st = nullptr;
+    // K-41a: 新增 tool_call_id / tool_name / tool_calls 三列
     const char* sql =
-        "INSERT INTO messages(session_id,role,content,created_at) VALUES(?,?,?,?);";
-    if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) return 0;
+        "INSERT INTO messages(session_id,role,content,created_at,"
+        "tool_call_id,tool_name,tool_calls) VALUES(?,?,?,?,?,?,?);";
+    if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) {
+        XAI_LOG_ERROR("appendMessageEx prepare failed: {} "
+                      "(old schema? see SessionStore::initSchema WARN)",
+                      sqlite3_errmsg(db_));
+        return 0;
+    }
     auto t = nowEpoch();
     sqlite3_bind_int64(st, 1, sessionId);
     sqlite3_bind_text (st, 2, role.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text (st, 3, content.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(st, 4, t);
+    sqlite3_bind_text (st, 5, toolCallId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text (st, 6, toolName.c_str(),   -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text (st, 7, toolCalls.c_str(),  -1, SQLITE_TRANSIENT);
 
     int64_t id = 0;
     if (sqlite3_step(st) == SQLITE_DONE) {
@@ -303,10 +358,17 @@ std::vector<MessageRow> SessionStore::listMessages(int64_t sessionId) {
     std::lock_guard<std::mutex> lk(mtx_);
 
     sqlite3_stmt* st = nullptr;
+    // K-41a: 多读 tool_call_id / tool_name / tool_calls 三列；老库（缺列）prepare 会失败
     const char* sql =
-        "SELECT id,session_id,role,content,created_at FROM messages "
+        "SELECT id,session_id,role,content,created_at,"
+        "tool_call_id,tool_name,tool_calls FROM messages "
         "WHERE session_id=? ORDER BY id ASC;";
-    if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) return out;
+    if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) {
+        XAI_LOG_WARN("listMessages prepare failed: {} "
+                     "(old schema? see SessionStore::initSchema WARN)",
+                     sqlite3_errmsg(db_));
+        return out;
+    }
     sqlite3_bind_int64(st, 1, sessionId);
 
     while (sqlite3_step(st) == SQLITE_ROW) {
@@ -318,6 +380,12 @@ std::vector<MessageRow> SessionStore::listMessages(int64_t sessionId) {
         r.role       = role    ? reinterpret_cast<const char*>(role)    : "";
         r.content    = content ? reinterpret_cast<const char*>(content) : "";
         r.createdAt  = sqlite3_column_int64(st, 4);
+        const auto* tci = sqlite3_column_text(st, 5);
+        const auto* tn  = sqlite3_column_text(st, 6);
+        const auto* tcs = sqlite3_column_text(st, 7);
+        r.toolCallId = tci ? reinterpret_cast<const char*>(tci) : "";
+        r.toolName   = tn  ? reinterpret_cast<const char*>(tn)  : "";
+        r.toolCalls  = tcs ? reinterpret_cast<const char*>(tcs) : "";
         out.push_back(std::move(r));
     }
     sqlite3_finalize(st);

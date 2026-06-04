@@ -36,6 +36,16 @@ struct MessageRow {
     std::string  role;       // "user" / "assistant" / "system" / "tool"
     std::string  content;
     std::int64_t createdAt = 0;
+    // K-41a: function calling 续跑支持
+    // - role == "assistant" 时，toolCalls 为该轮 assistant 输出的 tool_calls JSON 数组
+    //   （形如 `[{"id":"call_x","type":"function","function":{"name":"...","arguments":"..."}}]`），
+    //   若无工具调用则为空串
+    // - role == "tool" 时，toolCallId 为对应 assistant.tool_calls[i].id（必填），
+    //   toolName 为工具名（冗余存储，便于 UI 重放，等同 OpenAI 协议的 message.name）
+    // - 其它 role 全为空串
+    std::string  toolCallId;
+    std::string  toolName;
+    std::string  toolCalls;
 };
 
 struct ChunkRow {
@@ -75,6 +85,16 @@ public:
     int64_t                 appendMessage(int64_t sessionId,
                                           const std::string& role,
                                           const std::string& content);
+    // K-41a: function calling 续跑用——一次写入完整结构化消息。
+    // - 调 assistant 消息：toolCalls 传 JSON 数组（无工具调用传空串），toolCallId/toolName 留空
+    // - 调 tool 消息：toolCallId/toolName 必填，toolCalls 留空
+    // - user/system 消息：三个扩展字段全留空（也可直接用 3 参数老接口）
+    int64_t                 appendMessageEx(int64_t sessionId,
+                                            const std::string& role,
+                                            const std::string& content,
+                                            const std::string& toolCallId,
+                                            const std::string& toolName,
+                                            const std::string& toolCalls);
     std::vector<MessageRow> listMessages(int64_t sessionId);
 
     // ---- chunks (RAG) ----

@@ -64,6 +64,17 @@ logs/
 tests/*/build/
 tests/*/build-*/
 
-# ============= 发行包 / 个人笔记 =============
-x64dbg-ai-plugin-*.zip
-项目提示词.txt
+# ============= samples 内构建产物 =============
+samples/*/build/
+samples/*/build-*/
+
+# ============= 发行包 =============
+*.zip
+
+# ============= 个人笔记 / 草稿 / 演示稿 =============
+# 项目根目录的散落 txt（PPT 草稿、演讲稿、临时片段等）
+# 注意：CMakeLists.txt 也是 .txt 后缀，必须显式排除
+/*.txt
+!/CMakeLists.txt
+fantiaoshi.txt
+aqtinstall.log

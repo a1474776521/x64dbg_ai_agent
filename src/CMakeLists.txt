@@ -179,9 +179,13 @@ add_x64dbg_plugin(${PLUGIN_NAME}
 )
 
 # 拷贝插件到方便加载的位置（可选）
-set(X64DBG_RELEASE_DIR "E:/gongju/snapshot_2026-04-20_19-04/release"
-    CACHE PATH "x64dbg release 目录，用于 install 时直接拷贝插件")
+# 留空则不执行 install 拷贝；用户可在 cmake 配置时传：
+#   cmake -DX64DBG_RELEASE_DIR="D:/x64dbg/release" ...
+set(X64DBG_RELEASE_DIR ""
+    CACHE PATH "x64dbg release 目录（含 x32/x64 子目录），用于 install 时直接拷贝插件")
 
-install(TARGETS ${PLUGIN_NAME}
-    RUNTIME DESTINATION "${X64DBG_RELEASE_DIR}/${X64DbgSDK_ARCH}/plugins"
-)
+if(X64DBG_RELEASE_DIR)
+    install(TARGETS ${PLUGIN_NAME}
+        RUNTIME DESTINATION "${X64DBG_RELEASE_DIR}/${X64DbgSDK_ARCH}/plugins"
+    )
+endif()

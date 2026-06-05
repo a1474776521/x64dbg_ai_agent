@@ -189,7 +189,7 @@
 - **状态**：S3 (2026-05-26) 边界转码 + 内部 UTF-8 方案落地
 - **真正根因**：x64dbg SDK 的 `char*` 路径**本来就是 UTF-8**（`bridgemain.h:1477` 明确写 "code page is utf8"）。问题在于 **MSVC `std::filesystem::path(std::string)` 把入参按 ACP 解码**，UTF-8 的中文字节会被当 GBK 误读 → 路径乱码 → `fs::exists` 失败 → `ProjectContext::store` 永远 nullptr → "未在调试" / 历史浏览也读不到
 - **历史错判（已纠正）**：第一版修复以为 SDK 是 ACP，对 `szFileName` 强转 `ansiToUtf8`，反而把 UTF-8 当 GBK 二次解码，路径更乱（修了又坏）。第二版改为透传 + 内部 UTF-8、只在 `isValidUtf8` 失败时兜底 ansiToUtf8 才彻底好
-- **症状（修前）**：`logs/plugin.log` 出现 `main module path not exist: E:\gongju\jw???...\LgExe.exe`
+- **症状（修前）**：`logs/plugin.log` 出现 `main module path not exist: <本地路径>\<target>.exe`（中文段被错码解析为 `???`）
 - **实现**：
   - 新增 `util/encoding.{h,cpp}`：`ansiToUtf8 / utf8ToAnsi / wideToUtf8 / utf8ToWide / fsPathFromUtf8 / fsPathToUtf8 / isValidUtf8`
   - `plugin/plugin_callbacks.cpp::cbInitDebug` 直接透传 SDK 字符串（不再强转 ANSI）

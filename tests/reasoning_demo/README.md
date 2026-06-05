@@ -24,7 +24,7 @@
 ## 编译
 
 ```pwsh
-cd F:\x64dbg_pro\tests\reasoning_demo
+cd tests\reasoning_demo
 cmake -B build -S . -A x64
 cmake --build build --config Release
 # 产物：build\Release\reasoning_demo.exe

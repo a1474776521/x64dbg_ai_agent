@@ -25,7 +25,7 @@
 ## 编译
 
 ```pwsh
-cd F:\x64dbg_pro\tests\agent_demo
+cd tests\agent_demo
 cmake -B build -S . -A x64
 cmake --build build --config Release
 # 产物：build\Release\agent_demo.exe

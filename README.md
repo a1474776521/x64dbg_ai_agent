@@ -4,6 +4,8 @@
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows-blue.svg)](#)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](#)
 [![Qt 5.12.12](https://img.shields.io/badge/Qt-5.12.12-green.svg)](#)
+[![Latest Release](https://img.shields.io/github/v/release/a1474776521/x64dbg_ai_agent?label=release&color=brightgreen)](https://github.com/a1474776521/x64dbg_ai_agent/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/a1474776521/x64dbg_ai_agent/total?color=blue)](https://github.com/a1474776521/x64dbg_ai_agent/releases)
 
 为 [x64dbg](https://x64dbg.com) 开发的原生 C++ / Qt 插件，把大语言模型（GitHub Copilot Chat / DeepSeek）直接嵌进调试器，
 辅助逆向工作：反汇编 AI 解读、Agent 自主调试（**81 个工具**，K-43 已加运行态守卫）、多会话持久化、RAG 长期记忆、启发式定位器、调用链追溯（正向 trace + 反向 callstack 采样）、跨版本会话浏览导入。
@@ -43,6 +45,27 @@
 | x64dbg | snapshot 2026-04-20 或更新（需要其 `pluginsdk/`） |
 
 依赖（vcpkg 自动管理）：`cpr` `nlohmann-json` `spdlog` `cmark` `openssl`；`sqlite-vec` 用 v0.1.9 amalgamation 内嵌（vcpkg 暂无）。
+
+---
+
+## 下载预编译版（推荐普通用户）
+
+无需编译，直接下最新 release：
+
+| 架构 | 下载链接 | 适配 |
+|---|---|---|
+| **x64** | [x64dbg_ai_plugin.dp64](https://github.com/a1474776521/x64dbg_ai_agent/releases/latest/download/x64dbg_ai_plugin.dp64) | 64 位 x64dbg（绝大多数情况） |
+| **x32** | [x64dbg_ai_plugin.dp32](https://github.com/a1474776521/x64dbg_ai_agent/releases/latest/download/x64dbg_ai_plugin.dp32) | 32 位 x64dbg（调试 32 位目标时） |
+
+安装三步：
+
+1. 下载 `.dp64`（和/或 `.dp32`）
+2. 放到 x64dbg 安装目录的 `release\x64\plugins\`（和/或 `release\x32\plugins\`）
+3. 启动 x64dbg → `Plugins` 菜单会出现 **x64dbg AI**
+
+> 完整版本列表与 changelog：[Releases](https://github.com/a1474776521/x64dbg_ai_agent/releases)
+
+如需自己从源码构建（开发者、定制需求），见下面"快速上手"。
 
 ---
 

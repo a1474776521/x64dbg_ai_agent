@@ -78,3 +78,6 @@ samples/*/build-*/
 !/CMakeLists.txt
 fantiaoshi.txt
 aqtinstall.log
+
+# PPT 生成脚本（本地工具，不开源）
+tools/gen_ppt.py

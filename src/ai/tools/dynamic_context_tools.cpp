@@ -13,6 +13,7 @@
 //   - rag_search 依赖 EmbeddingClient + 当前 ProjectContext
 
 #include "ai/tools/builtin_tools.h"
+#include "ai/tools/dbg_state_util.h"  // K-43
 #include "ai/tools/tool.h"
 #include "ai/tools/tool_args_util.h"
 #include "ai/tools/tool_context.h"
@@ -154,6 +155,17 @@ public:
             {"returned", n},
             {"frames",   std::move(frames)},
         };
+        // K-43: running 时栈帧遍历是基于上次 paused 的 RSP/RBP 快照，结果可能完全错乱。
+        // 不拒绝（保留 debug 价值），但 stale=true 让 LLM 谨慎采纳。
+        const bool stale = DbgIsRunning();
+        r.data["current_state"] = currentDbgStateStr();
+        r.data["stale"]         = stale;
+        if (stale) {
+            r.data["stale_note"] =
+                "debuggee is currently running; stack frames are walked from the last "
+                "paused SP/BP snapshot, not live state. Frames may be inconsistent or "
+                "missing. Call pause_debug + get_callstack again for accurate frames.";
+        }
         return r;
     }
 };

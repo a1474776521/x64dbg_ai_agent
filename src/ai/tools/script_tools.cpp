@@ -16,6 +16,7 @@
 //     改内存，威胁面 = patch_memory + set_register 的并集）。
 //   - list_scripts category=Read（只列文件名 + size + mtime，不读内容）。
 #include "ai/tools/builtin_tools.h"
+#include "ai/tools/dbg_state_util.h"  // K-43
 #include "ai/tools/tool.h"
 #include "ai/tools/tool_context.h"
 #include "ai/tools/tool_registry.h"
@@ -236,9 +237,15 @@ public:
             {"required", nlohmann::json::array({"path"})},
         };
     }
-    ToolResult invoke(const nlohmann::json& args, ToolContext& /*ctx*/) override
+    ToolResult invoke(const nlohmann::json& args, ToolContext& ctx) override
     {
         ToolResult r;
+        // K-43: 旧版完全没查 DbgIsDebugging——脚本里几乎必然含 bp/step/run/r 等
+        // 状态敏感命令；未附加进程时跑脚本是 fire-and-forget 真坑（任何错误吞掉，
+        // 工具返回 started=true 让 LLM 以为成功）。
+        if (!ctx.debuggerActive || !DbgIsDebugging()) {
+            r.ok = false; r.error = "debugger is not active"; return r;
+        }
         if (!args.contains("path") || !args["path"].is_string()) {
             r.ok = false; r.error = "'path' required (string)"; return r;
         }
@@ -263,15 +270,22 @@ public:
         DbgScriptLoad(resolved.string().c_str());
         // destline = 0 → 从第一行开始跑到 ret / end
         DbgScriptRun(0);
-        XAI_LOG_INFO("run_script_file: triggered {} ({} bytes)",
+        const char* st = currentDbgStateStr();
+        XAI_LOG_INFO("run_script_file: triggered {} ({} bytes) state={}",
                      resolved.string().c_str(),
-                     ec ? 0 : static_cast<std::uint64_t>(sz));
+                     ec ? 0 : static_cast<std::uint64_t>(sz),
+                     st);
         r.ok = true;
         r.data = {
-            {"path",       resolved.string()},
-            {"size_bytes", ec ? 0 : static_cast<std::uint64_t>(sz)},
-            {"started",    true},
-            {"note",       "fire-and-forget; use wait_for_event or follow-up tools to observe."},
+            {"path",          resolved.string()},
+            {"size_bytes",    ec ? 0 : static_cast<std::uint64_t>(sz)},
+            {"started",       true},
+            // K-43: 暴露调用时的 debug 状态，提示 LLM 后续走 wait_for_event / get_debug_state
+            // 才能知道脚本里 step/run 命令是否成功
+            {"current_state", st},
+            {"note",          "fire-and-forget; x64dbg's script engine has no 'finished' event; "
+                              "step/run commands inside the script require paused state; "
+                              "use wait_for_event or get_debug_state to observe progress."},
         };
         return r;
     }

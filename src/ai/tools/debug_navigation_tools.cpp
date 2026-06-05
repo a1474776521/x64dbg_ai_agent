@@ -14,6 +14,7 @@
 //     如果用户要"运行直到下一次自动停"，传 wait_for_stop=true，但仍受 timeout 保护。
 //   - pause_debug 同步等 Paused（pause 命令本身很快出 Paused 事件）。
 #include "ai/tools/builtin_tools.h"
+#include "ai/tools/dbg_state_util.h"  // K-43: 公共 currentDbgStateStr / currentCipHexOrEmpty
 #include "ai/tools/tool.h"
 #include "ai/tools/tool_args_util.h"
 #include "ai/tools/tool_context.h"
@@ -64,11 +65,8 @@ bool waitForStop(const std::atomic<bool>* cancel, int timeoutMs)
 //   "paused"        : 已附加但 debuggee 停下（断点/暂停/单步结束等）
 // 用途：执行控制类工具的前置校验 + 错误信息里带回当前状态，
 //       让 LLM 看到失败原因后能自我纠正（不必再去查 get_debug_state）。
-const char* currentDbgStateStr()
-{
-    if (!DbgIsDebugging()) return "not_debugging";
-    return DbgIsRunning() ? "running" : "paused";
-}
+// K-43: 抽到 dbg_state_util.h 作为公共 helper；本文件保留 using 引用以便最小改动。
+using x64ai::currentDbgStateStr;
 
 }  // namespace
 

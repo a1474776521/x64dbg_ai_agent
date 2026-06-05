@@ -12,6 +12,7 @@
 //     · 上限 16 MB，与 set_page_protect 保持一致的安全线
 //   - set_flag：name→FlagEnum 映射；非法 name 直接报错
 #include "ai/tools/builtin_tools.h"
+#include "ai/tools/dbg_state_util.h"  // K-43
 #include "ai/tools/tool.h"
 #include "ai/tools/tool_args_util.h"
 #include "ai/tools/tool_context.h"
@@ -249,6 +250,16 @@ public:
         if (!ctx.debuggerActive || !DbgIsDebugging()) {
             r.ok=false; r.error="debugger is not active"; return r;
         }
+        // K-43: EFLAGS 同样存活在 thread context 里，要求 paused 才能改。
+        // running 时 Script::Flag::Set 通常返回 false，且即便偶尔成功也会被立刻覆盖。
+        if (DbgIsRunning()) {
+            r.ok = false;
+            r.error = "cannot set_flag: debuggee is currently 'running'; EFLAGS lives "
+                      "in thread context and cannot be reliably written while the target "
+                      "thread is executing. Call pause_debug first.";
+            r.data = {{"current_state", "running"}};
+            return r;
+        }
         if (!args.contains("name") || !args["name"].is_string() ||
             !args.contains("value") || !args["value"].is_boolean()) {
             r.ok=false; r.error="'name'(string) and 'value'(bool) are required"; return r;
@@ -268,7 +279,12 @@ public:
         else { r.ok=false; r.error="invalid flag name '" + n + "'"; return r; }
 
         const bool ok = Script::Flag::Set(f, v);
-        if (!ok) { r.ok=false; r.error="Script::Flag::Set returned false"; return r; }
+        if (!ok) {
+            r.ok = false;
+            r.error = std::string("Script::Flag::Set returned false for '") + n
+                      + "' (current_state=" + currentDbgStateStr() + ")";
+            return r;
+        }
         XAI_LOG_INFO("set_flag: {} = {}", n.c_str(), v ? 1 : 0);
         r.ok=true;
         r.data = {{"name", n}, {"value", v}};

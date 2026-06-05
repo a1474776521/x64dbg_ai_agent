@@ -16,6 +16,7 @@
 //   - write_string utf16le 自动按 wchar_t 对齐，自动追加 2 字节 0；
 //     ascii 路径会拒绝 >0x7F 字节，避免静默 mojibake。
 #include "ai/tools/builtin_tools.h"
+#include "ai/tools/dbg_state_util.h"  // K-43: currentDbgStateStr
 #include "ai/tools/tool.h"
 #include "ai/tools/tool_args_util.h"
 #include "ai/tools/tool_context.h"
@@ -380,6 +381,17 @@ public:
         if (!ctx.debuggerActive || !DbgIsDebugging()) {
             r.ok = false; r.error = "debugger is not active"; return r;
         }
+        // K-43: Script::Register::Set 走 SetThreadContext，要求目标线程 suspended，
+        // 即 debuggee 必须 paused。running 时绝大多数情况下要么直接失败，要么写入立刻
+        // 被 debuggee 自己恢复（thread context 被该线程的下一条指令覆盖）。强制前置拒。
+        if (DbgIsRunning()) {
+            r.ok = false;
+            r.error = "cannot set_register: debuggee is currently 'running'; "
+                      "the CPU context belongs to the target thread, not the debugger. "
+                      "Call pause_debug first so the thread is suspended.";
+            r.data = {{"current_state", "running"}};
+            return r;
+        }
         if (!args.contains("name") || !args["name"].is_string()) {
             r.ok = false; r.error = "'name' required (string)"; return r;
         }
@@ -409,7 +421,8 @@ public:
         }
         if (!Script::Register::Set(e->id, static_cast<duint>(value))) {
             r.ok = false;
-            r.error = std::string("Script::Register::Set failed for ") + e->name;
+            r.error = std::string("Script::Register::Set failed for ") + e->name
+                      + " (current_state=" + currentDbgStateStr() + ")";
             return r;
         }
         XAI_LOG_INFO("set_register: {} <- 0x{:X}", e->name, value);

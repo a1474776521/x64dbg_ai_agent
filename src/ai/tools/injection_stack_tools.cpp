@@ -16,6 +16,7 @@
 //   注意：stack_pop（真弹出）反向工程场景几乎不用，且会破坏调用约定的 ESP 一致性，因此**不暴露 pop**。
 //   想要弹出 + 恢复，让 LLM 用 stack_peek 读 + set_register("esp", esp+size) 显式做。
 #include "ai/tools/builtin_tools.h"
+#include "ai/tools/dbg_state_util.h"  // K-43
 #include "ai/tools/tool.h"
 #include "ai/tools/tool_args_util.h"
 #include "ai/tools/tool_context.h"
@@ -220,6 +221,19 @@ public:
         if (!ctx.debuggerActive || !DbgIsDebugging()) {
             r.ok=false; r.error="debugger is not active"; return r;
         }
+        // K-43: stack_push 实际改 SetThreadContext(SP) + WriteProcessMemory(SP-N)。
+        // running 时 SP 是缓存历史值，按它算出来的地址几乎必定不是当前真实栈位置——
+        // 轻则写到无意义区域、重则覆盖随机数据让 debuggee 立刻 crash。
+        // 必须 paused 才允许。
+        if (DbgIsRunning()) {
+            r.ok = false;
+            r.error = "cannot stack_push: debuggee is currently 'running'; SP is not "
+                      "stable (the cached value reflects the last paused snapshot, not "
+                      "the live thread). Writing through stale SP can corrupt random "
+                      "memory and crash the debuggee. Call pause_debug first.";
+            r.data = {{"current_state", "running"}};
+            return r;
+        }
         std::uint64_t v = 0;
         std::string e;
         if (!parseVa(args, "value", v, e)) { r.ok=false; r.error=e; return r; }
@@ -283,6 +297,9 @@ public:
         const duint sp  = Script::Register::GetCSP();
         const std::uint64_t va = static_cast<std::uint64_t>(sp) +
             static_cast<std::int64_t>(off) * static_cast<std::int64_t>(sizeof(duint));
+        // K-43: running 时 SP 和 peek 出的值都是缓存历史值。不拒绝（读类无副作用），
+        // 但 stale 字段直接告诉 LLM 别拿这些数据做精确决策。
+        const bool stale = DbgIsRunning();
         r.ok=true;
         r.data = {
             {"sp",            formatHexU64(static_cast<std::uint64_t>(sp))},
@@ -290,7 +307,14 @@ public:
             {"address",       formatHexU64(va)},
             {"value",         formatHexU64(static_cast<std::uint64_t>(val))},
             {"pointer_size",  static_cast<unsigned>(sizeof(duint))},
+            {"current_state", currentDbgStateStr()},
+            {"stale",         stale},
         };
+        if (stale) {
+            r.data["stale_note"] =
+                "debuggee is currently running; SP/value reflect the last paused snapshot, "
+                "not live thread state. Call pause_debug + stack_peek again if you need live data.";
+        }
         return r;
     }
 };

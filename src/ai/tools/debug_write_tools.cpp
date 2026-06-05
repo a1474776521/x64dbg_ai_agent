@@ -16,6 +16,7 @@
 //     不直接 Script::Debug::Wait()（那是简单的 Sleep loop，无 cancel 支持）。
 //   - DbgIsDebugging() 检查放最前；进程 running 时拒绝下命令（step 类要求当前是 paused）。
 #include "ai/tools/builtin_tools.h"
+#include "ai/tools/dbg_state_util.h"  // K-43: currentDbgStateStr / currentCipHexOrEmpty
 #include "ai/tools/tool.h"
 #include "ai/tools/tool_args_util.h"
 #include "ai/tools/tool_context.h"
@@ -324,13 +325,24 @@ public:
         if (!ctx.debuggerActive || !DbgIsDebugging()) {
             r.ok = false; r.error = "debugger is not active"; return r;
         }
+        // K-43: StepInto 要求 paused；x64dbg 在 running 时拒收并仅返回 false。
+        if (DbgIsRunning()) {
+            r.ok = false;
+            r.error = "cannot step_in: debuggee is currently 'running'; "
+                      "call wait_for_event or pause_debug first to reach a paused state";
+            r.data = {{"current_state", "running"}};
+            return r;
+        }
         int timeoutMs = 30000;
         std::string e;
         if (tryGetInt32Hint(args, "timeout_ms", 100, 60000, timeoutMs, e)) {}
         else if (!e.empty()) { r.ok=false; r.error="invalid 'timeout_ms': "+e; return r; }
 
         if (!DbgCmdExecDirect("StepInto")) {
-            r.ok = false; r.error = "StepInto command failed"; return r;
+            r.ok = false;
+            r.error = std::string("StepInto command rejected by x64dbg (current_state=")
+                      + currentDbgStateStr() + ")";
+            return r;
         }
         if (!waitForStop(ctx.cancelFlag, timeoutMs)) {
             r.ok = false; r.error = "timeout waiting for step to complete"; return r;
@@ -373,13 +385,24 @@ public:
         if (!ctx.debuggerActive || !DbgIsDebugging()) {
             r.ok = false; r.error = "debugger is not active"; return r;
         }
+        // K-43: StepOver 同 step_in 要求 paused。
+        if (DbgIsRunning()) {
+            r.ok = false;
+            r.error = "cannot step_over: debuggee is currently 'running'; "
+                      "call wait_for_event or pause_debug first to reach a paused state";
+            r.data = {{"current_state", "running"}};
+            return r;
+        }
         int timeoutMs = 30000;
         std::string e;
         if (tryGetInt32Hint(args, "timeout_ms", 100, 60000, timeoutMs, e)) {}
         else if (!e.empty()) { r.ok=false; r.error="invalid 'timeout_ms': "+e; return r; }
 
         if (!DbgCmdExecDirect("StepOver")) {
-            r.ok = false; r.error = "StepOver command failed"; return r;
+            r.ok = false;
+            r.error = std::string("StepOver command rejected by x64dbg (current_state=")
+                      + currentDbgStateStr() + ")";
+            return r;
         }
         if (!waitForStop(ctx.cancelFlag, timeoutMs)) {
             r.ok = false; r.error = "timeout waiting for step to complete"; return r;
@@ -428,6 +451,16 @@ public:
         if (!ctx.debuggerActive || !DbgIsDebugging()) {
             r.ok = false; r.error = "debugger is not active"; return r;
         }
+        // K-43: run_until 第二步要调 "run"，x64dbg 在 already-running 时拒收；
+        // 而且这种状态下也根本不该装 one-shot bp（avoid leaking bp）。一并前置拒绝。
+        if (DbgIsRunning()) {
+            r.ok = false;
+            r.error = "cannot run_until: debuggee is currently 'running'; "
+                      "call wait_for_event (to observe the next stop) or "
+                      "pause_debug first; no breakpoint has been installed";
+            r.data = {{"current_state", "running"}};
+            return r;
+        }
         std::uint64_t va = 0; std::string err;
         if (!parseVa(args, "addr", va, err)) { r.ok = false; r.error = err; return r; }
         int timeoutMs = 30000;
@@ -447,7 +480,12 @@ public:
         if (!DbgCmdExecDirect("run")) {
             // 撤销 bp
             (void)Script::Debug::DeleteBreakpoint(static_cast<duint>(va));
-            r.ok = false; r.error = "run command failed"; return r;
+            r.ok = false;
+            r.error = std::string("run command rejected by x64dbg (current_state=")
+                      + currentDbgStateStr()
+                      + "); one-shot bp at " + formatHexU64(va)
+                      + " has been removed";
+            return r;
         }
         hit = waitForStop(ctx.cancelFlag, timeoutMs);
         // 不管 hit 与否都尝试删——singleshoot 命中后 x64dbg 自己也会清，但兜底
@@ -597,8 +635,14 @@ public:
     {
         ToolResult r;
         if (DbgIsDebugging()) {
+            // K-43: error 附 current_state + cip，LLM 看了能立即决策（继续用现有会话还是
+            // stop+start）。
             r.ok=false;
-            r.error="a debug session is already active - call stop_debug or restart_debug first";
+            r.error = std::string("a debug session is already active (current_state=")
+                      + currentDbgStateStr() + ", cip=" + currentCipHexOrEmpty()
+                      + ") - call stop_debug or restart_debug first";
+            r.data = {{"current_state", currentDbgStateStr()},
+                      {"cip", currentCipHexOrEmpty()}};
             return r;
         }
         if (!args.contains("target_path") || !args["target_path"].is_string()) {
@@ -662,8 +706,13 @@ public:
     {
         ToolResult r;
         if (DbgIsDebugging()) {
+            // K-43: error 附 current_state + cip
             r.ok=false;
-            r.error="a debug session is already active - call detach or stop_debug first";
+            r.error = std::string("a debug session is already active (current_state=")
+                      + currentDbgStateStr() + ", cip=" + currentCipHexOrEmpty()
+                      + ") - call detach or stop_debug first";
+            r.data = {{"current_state", currentDbgStateStr()},
+                      {"cip", currentCipHexOrEmpty()}};
             return r;
         }
         if (!args.contains("pid") || !args["pid"].is_number_integer()) {
@@ -744,13 +793,19 @@ public:
     {
         ToolResult r;
         if (!DbgIsDebugging()) {
+            // K-43: error 附 current_state（虽然此分支必定 not_debugging，统一格式便于 LLM 解析）
             r.ok=false;
-            r.error="no active debug session - call start_debug to launch a new one";
+            r.error = std::string("no active debug session (current_state=")
+                      + currentDbgStateStr() + ") - call start_debug to launch a new one";
+            r.data = {{"current_state", currentDbgStateStr()}};
             return r;
         }
         XAI_LOG_INFO("restart_debug invoked");
         if (!DbgCmdExecDirect("Restart")) {
-            r.ok=false; r.error="DbgCmdExecDirect failed for: Restart"; return r;
+            r.ok=false;
+            r.error = std::string("DbgCmdExecDirect failed for: Restart (current_state=")
+                      + currentDbgStateStr() + ")";
+            return r;
         }
         r.ok=true;
         r.data = {

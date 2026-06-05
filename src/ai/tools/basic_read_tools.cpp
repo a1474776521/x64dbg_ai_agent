@@ -14,6 +14,7 @@
 //   - 地址 / 大小做严格校验，不允许参数把进程拖垮
 //   - 不写内存、不改寄存器、不动断点
 #include "ai/tools/builtin_tools.h"
+#include "ai/tools/dbg_state_util.h"  // K-43: stale 标记
 #include "ai/tools/tool.h"
 #include "ai/tools/tool_args_util.h"
 #include "ai/tools/tool_context.h"
@@ -405,9 +406,21 @@ public:
         };
 
         r.data = {
-            {"gpr",     std::move(gpr)},
+            {"gpr",       std::move(gpr)},
             {"lastError", fmt(static_cast<std::uint64_t>(rd.lastError))},
         };
+        // K-43: running 时 DbgGetRegDumpEx 返回的是 debugger 缓存的上次 paused 快照——
+        // 不是实时寄存器。LLM 拿 rax 做下一步运算（如 va = rax + N）会全错。
+        // 不拒绝（保留 debug 价值），但 stale=true 让 LLM 知道别当真。
+        const bool stale = DbgIsRunning();
+        r.data["current_state"] = currentDbgStateStr();
+        r.data["stale"]         = stale;
+        if (stale) {
+            r.data["stale_note"] =
+                "debuggee is currently running; register values reflect the last paused "
+                "snapshot, not live thread state. Call pause_debug + get_registers again "
+                "if you need accurate values.";
+        }
         return r;
     }
 };
@@ -542,11 +555,20 @@ public:
         char buf[32];
         std::snprintf(buf, sizeof(buf), "%llu",
                       static_cast<unsigned long long>(value));
+        // K-43: 表达式可能含寄存器（rax/cip）或栈解引用（[rbp+8]）等动态量；running 时
+        // 这些都基于 stale 快照求值。静态量（mod.base()、imagebase()、字面量）不受影响。
+        // 不拒绝，但回报 current_state 让 LLM 自行判断要不要先 pause_debug。
         r.data = {
-            {"expr",      expr},
-            {"value",     formatHexVa(static_cast<std::uint64_t>(value))},
-            {"value_dec", buf},
+            {"expr",          expr},
+            {"value",         formatHexVa(static_cast<std::uint64_t>(value))},
+            {"value_dec",     buf},
+            {"current_state", currentDbgStateStr()},
         };
+        if (DbgIsRunning()) {
+            r.data["stale_note"] =
+                "debuggee is running; if the expression dereferences registers or memory "
+                "that may have changed (e.g. [rsp], rax, cip), the result may be stale.";
+        }
         return r;
     }
 };

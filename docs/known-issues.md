@@ -218,7 +218,7 @@
 
 ### K-29：`search_pattern` 带 module 参数失败 / 工具失败时 agent 看不到 error ✅ 已修复
 - **状态**：2026-05-27
-- **现象 1（search_pattern）**：调 `search_pattern(pattern="48 8B ?? ??", module="LgExe.exe")` 返回 ok=false `eval failed: mod.size("LgExe.exe")`
+- **现象 1（search_pattern）**：调 `search_pattern(pattern="48 8B ?? ??", module="target.exe")` 返回 ok=false `eval failed: mod.size("target.exe")`
 - **根因**：原实现走 `DbgEval("mod.size(\"name\")")` 算搜索区间长度，但 x64dbg 表达式求值器**不接受带引号的字符串参数**，永远 fail；同样写法 `mod.base()` 也不行
 - **修复**：`static_analysis_tools.cpp:325-336` 改用 `DbgFunctions()->ModSizeFromAddr(base)`（base 已由 `DbgModBaseFromName(name)` 拿到），不再走表达式层
 - **现象 2（agent 看不到 error）**：所有 69 个工具，凡是返回 ok=false 的，agent 拿到的 ToolResult 都只看到一个空 data；plugin.log 里也只打 `tool=xxx ok=false` 没具体 error

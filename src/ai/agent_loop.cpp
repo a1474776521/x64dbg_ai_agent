@@ -33,6 +33,8 @@ bool providerSupportsTools(IChatProvider* p)
     if (!p) return false;
     // DeepSeek 官方 API 原生 function calling
     if (p->kind() == ProviderKind::DeepSeek) return true;
+    // KSPmas 是 OpenAI 兼容服务，按支持处理；若服务端真不支持会返 HTTP 400 立即可见
+    if (p->kind() == ProviderKind::KSPmas)   return true;
     // Copilot 由 modelSupportsToolsViaCopilot() 按模型细判（见下）
     return false;
 }
@@ -75,6 +77,7 @@ bool resolvedSupportsTools(IChatProvider* p, const std::string& effectiveModel)
 {
     if (!p) return false;
     if (p->kind() == ProviderKind::DeepSeek) return true;
+    if (p->kind() == ProviderKind::KSPmas)   return true;
     if (p->kind() == ProviderKind::Copilot) {
         return modelSupportsToolsViaCopilot(effectiveModel);
     }

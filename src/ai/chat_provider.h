@@ -125,6 +125,7 @@ struct ChatStreamCallbacks {
 enum class ProviderKind {
     Copilot   = 0,
     DeepSeek  = 1,
+    KSPmas    = 2,   // 金山云 KSPmas（OpenAI 兼容）
 };
 
 inline const char* providerKindToString(ProviderKind k)
@@ -132,6 +133,7 @@ inline const char* providerKindToString(ProviderKind k)
     switch (k) {
     case ProviderKind::Copilot:  return "copilot";
     case ProviderKind::DeepSeek: return "deepseek";
+    case ProviderKind::KSPmas:   return "kspmas";
     }
     return "copilot";
 }
@@ -139,6 +141,7 @@ inline const char* providerKindToString(ProviderKind k)
 inline ProviderKind providerKindFromString(const std::string& s)
 {
     if (s == "deepseek") return ProviderKind::DeepSeek;
+    if (s == "kspmas")   return ProviderKind::KSPmas;
     return ProviderKind::Copilot;
 }
 

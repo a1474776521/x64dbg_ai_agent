@@ -92,6 +92,12 @@ void Config::loadLocked()
         readField(d, "default_model", data_.deepseek.defaultModel);
     }
 
+    if (j.contains("kspmas") && j["kspmas"].is_object()) {
+        const auto& k = j["kspmas"];
+        readField(k, "api_base",      data_.kspmas.apiBase);
+        readField(k, "default_model", data_.kspmas.defaultModel);
+    }
+
     readField(j, "provider",        data_.provider);
     readField(j, "default_model",   data_.defaultModel);
     readField(j, "http_timeout_ms",      data_.httpTimeoutMs);

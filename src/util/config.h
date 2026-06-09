@@ -35,10 +35,19 @@ struct DeepSeekEndpointConfig {
     std::string defaultModel = "deepseek-chat";
 };
 
+// 金山云 KSPmas（OpenAI 兼容）；详见 ai/kspmas_chat_client.{h,cpp}
+struct KSPmasEndpointConfig {
+    // OpenAI 兼容的基础 URL（chat/completions、models）
+    std::string apiBase = "https://kspmas.ksyun.com/v1";
+    // 默认模型；用户可在 config.json 的 "kspmas.default_model" 覆盖
+    std::string defaultModel = "deepseek-v4-pro";
+};
+
 struct AppConfig {
     CopilotEndpointConfig copilot;
     DeepSeekEndpointConfig deepseek;
-    // 当前 Provider："copilot" | "deepseek"
+    KSPmasEndpointConfig   kspmas;
+    // 当前 Provider："copilot" | "deepseek" | "kspmas"
     std::string           provider     = "copilot";
     std::string           defaultModel = "gpt-4o-mini";
     int                   httpTimeoutMs = 60000;

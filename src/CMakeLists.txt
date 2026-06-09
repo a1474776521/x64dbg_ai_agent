@@ -21,6 +21,8 @@ set(PLUGIN_SOURCES
     ai/copilot_chat_client.h
     ai/deepseek_chat_client.cpp
     ai/deepseek_chat_client.h
+    ai/kspmas_chat_client.cpp
+    ai/kspmas_chat_client.h
     ai/provider_manager.cpp
     ai/provider_manager.h
     ai/embedding_client.cpp
@@ -129,6 +131,8 @@ set(PLUGIN_SOURCES
     ui/trace_dialog.h
     ui/api_key_dialog.cpp
     ui/api_key_dialog.h
+    ui/kspmas_api_key_dialog.cpp
+    ui/kspmas_api_key_dialog.h
     ui/tool_confirm_dialog.cpp
     ui/tool_confirm_dialog.h
     ui/tools_browser_dialog.cpp

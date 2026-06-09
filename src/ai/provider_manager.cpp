@@ -7,6 +7,7 @@
 
 #include "ai/copilot_chat_client.h"
 #include "ai/deepseek_chat_client.h"
+#include "ai/kspmas_chat_client.h"
 #include "util/config.h"
 #include "util/logging.h"
 #include "util/paths.h"
@@ -33,6 +34,7 @@ IChatProvider* ProviderManager::get(ProviderKind kind)
     switch (kind) {
     case ProviderKind::Copilot:  return &CopilotChatClient::instance();
     case ProviderKind::DeepSeek: return &DeepSeekChatClient::instance();
+    case ProviderKind::KSPmas:   return &KSPmasChatClient::instance();
     }
     return &CopilotChatClient::instance();
 }

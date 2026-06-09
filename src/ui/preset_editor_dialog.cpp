@@ -161,6 +161,7 @@ void PresetEditorDialog::buildUi()
     providerBox_->addItem(QStringLiteral("(沿用当前激活)"), QString());
     providerBox_->addItem(QStringLiteral("DeepSeek"),         QStringLiteral("deepseek"));
     providerBox_->addItem(QStringLiteral("GitHub Copilot"),   QStringLiteral("copilot"));
+    providerBox_->addItem(QStringLiteral("金山云 KSPmas"),    QStringLiteral("kspmas"));
 
     modelEdit_ = new QLineEdit(this);
     modelEdit_->setPlaceholderText(QStringLiteral("留空 = provider 默认模型"));

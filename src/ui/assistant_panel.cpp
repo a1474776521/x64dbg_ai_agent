@@ -26,6 +26,7 @@
 #include "ai/copilot_auth.h"
 #include "ai/copilot_chat_client.h"
 #include "ai/deepseek_chat_client.h"
+#include "ai/kspmas_chat_client.h"
 #include "ai/embedding_client.h"
 #include "ai/preset_store.h"
 #include "ai/provider_manager.h"
@@ -37,6 +38,7 @@
 #include "storage/project_context.h"
 #include "storage/session_store.h"
 #include "ui/api_key_dialog.h"
+#include "ui/kspmas_api_key_dialog.h"
 #include "ui/chat_view.h"
 #include "ui/history_dialog.h"
 #include "ui/login_dialog.h"
@@ -97,12 +99,14 @@ AssistantPanel::AssistantPanel(QWidget* parent)
     providerBox_ = new QComboBox(this);
     providerBox_->setMinimumWidth(140);
     providerBox_->setEditable(false);
-    providerBox_->setToolTip(QStringLiteral("选择 LLM 后端：Copilot（GitHub 订阅）或 DeepSeek（按量付费）"));
+    providerBox_->setToolTip(QStringLiteral("选择 LLM 后端：Copilot（GitHub 订阅）/ DeepSeek（按量付费）/ 金山云 KSPmas（按量付费）"));
     // userData 存 ProviderKind 整数
     providerBox_->addItem(QStringLiteral("GitHub Copilot"),
                           static_cast<int>(ProviderKind::Copilot));
     providerBox_->addItem(QStringLiteral("DeepSeek"),
                           static_cast<int>(ProviderKind::DeepSeek));
+    providerBox_->addItem(QStringLiteral("金山云 KSPmas"),
+                          static_cast<int>(ProviderKind::KSPmas));
     {
         auto k = ProviderManager::instance().currentKind();
         int idx = providerBox_->findData(static_cast<int>(k));
@@ -541,8 +545,7 @@ void AssistantPanel::refreshLoginStatus()
             loginBtn_->setText(QStringLiteral(" 登录"));
             loginBtn_->setToolTip(QStringLiteral("使用 GitHub Device Flow 登录 Copilot"));
         }
-    } else {
-        // DeepSeek
+    } else if (kind == ProviderKind::DeepSeek) {
         auto masked = DeepSeekChatClient::instance().maskedApiKey();
         if (!masked.empty()) {
             loginStatus_->setText(QStringLiteral("● DeepSeek：%1")
@@ -557,6 +560,23 @@ void AssistantPanel::refreshLoginStatus()
             loginBtn_->setIcon(QIcon(QStringLiteral(":/x64dbg-ai/icons/login.svg")));
             loginBtn_->setText(QStringLiteral(" 设置 Key"));
             loginBtn_->setToolTip(QStringLiteral("输入 DeepSeek API Key（DPAPI 加密保存）"));
+        }
+    } else {
+        // KSPmas
+        auto masked = KSPmasChatClient::instance().maskedApiKey();
+        if (!masked.empty()) {
+            loginStatus_->setText(QStringLiteral("● KSPmas：%1")
+                                      .arg(QString::fromStdString(masked)));
+            loginStatus_->setObjectName(QStringLiteral("loginStatusOk"));
+            loginBtn_->setIcon(QIcon(QStringLiteral(":/x64dbg-ai/icons/logout.svg")));
+            loginBtn_->setText(QStringLiteral(" 修改 Key"));
+            loginBtn_->setToolTip(QStringLiteral("修改或清除已保存的 KSPmas API Key"));
+        } else {
+            loginStatus_->setText(QStringLiteral("● KSPmas 未设置 Key"));
+            loginStatus_->setObjectName(QStringLiteral("loginStatusFail"));
+            loginBtn_->setIcon(QIcon(QStringLiteral(":/x64dbg-ai/icons/login.svg")));
+            loginBtn_->setText(QStringLiteral(" 设置 Key"));
+            loginBtn_->setToolTip(QStringLiteral("输入 KSPmas API Key（DPAPI 加密保存）"));
         }
     }
     loginStatus_->style()->unpolish(loginStatus_);
@@ -591,18 +611,37 @@ void AssistantPanel::onLoginClicked()
         return;
     }
 
-    // DeepSeek 分支
-    ApiKeyDialog dlg(this);
+    if (kind == ProviderKind::DeepSeek) {
+        ApiKeyDialog dlg(this);
+        int ret = dlg.exec();
+        if (ret == QDialog::Accepted) {
+            QString k = dlg.apiKey();
+            if (!k.isEmpty()) {
+                bool ok = DeepSeekChatClient::instance().saveApiKey(k.toStdString());
+                chat_->appendSystemNote(ok
+                    ? QStringLiteral("DeepSeek API Key 已保存。")
+                    : QStringLiteral("DeepSeek API Key 保存失败。"));
+            } else if (dlg.cleared()) {
+                chat_->appendSystemNote(QStringLiteral("已清除 DeepSeek API Key。"));
+            }
+            refreshLoginStatus();
+            refreshModelsAsync();
+        }
+        return;
+    }
+
+    // KSPmas 分支
+    KSPmasApiKeyDialog dlg(this);
     int ret = dlg.exec();
     if (ret == QDialog::Accepted) {
         QString k = dlg.apiKey();
         if (!k.isEmpty()) {
-            bool ok = DeepSeekChatClient::instance().saveApiKey(k.toStdString());
+            bool ok = KSPmasChatClient::instance().saveApiKey(k.toStdString());
             chat_->appendSystemNote(ok
-                ? QStringLiteral("DeepSeek API Key 已保存。")
-                : QStringLiteral("DeepSeek API Key 保存失败。"));
+                ? QStringLiteral("KSPmas API Key 已保存。")
+                : QStringLiteral("KSPmas API Key 保存失败。"));
         } else if (dlg.cleared()) {
-            chat_->appendSystemNote(QStringLiteral("已清除 DeepSeek API Key。"));
+            chat_->appendSystemNote(QStringLiteral("已清除 KSPmas API Key。"));
         }
         refreshLoginStatus();
         refreshModelsAsync();
@@ -1032,6 +1071,7 @@ void AssistantPanel::runAgentWithPreset(const std::string& presetId,
     ProviderKind kind = ProviderManager::instance().currentKind();
     if (preset.provider == "deepseek") kind = ProviderKind::DeepSeek;
     else if (preset.provider == "copilot") kind = ProviderKind::Copilot;
+    else if (preset.provider == "kspmas")  kind = ProviderKind::KSPmas;
     auto* provider = ProviderManager::get(kind);
     if (!provider) {
         chat_->appendSystemNote(QStringLiteral("无法获取 Provider。"));
@@ -1182,6 +1222,7 @@ void AssistantPanel::continueAgentFromSnapshot(const std::string&       presetId
     ProviderKind kind = ProviderManager::instance().currentKind();
     if (preset.provider == "deepseek") kind = ProviderKind::DeepSeek;
     else if (preset.provider == "copilot") kind = ProviderKind::Copilot;
+    else if (preset.provider == "kspmas")  kind = ProviderKind::KSPmas;
     auto* provider = ProviderManager::get(kind);
     if (!provider) {
         chat_->appendSystemNote(QStringLiteral("续跑失败：无法获取 Provider。"));

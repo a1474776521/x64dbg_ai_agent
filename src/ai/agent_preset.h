@@ -9,7 +9,7 @@
 //   systemPrompt    role=system 的初始消息（可为空 → 用全局默认）
 //   userTemplate    用户消息模板；支持占位符（见 expandTemplate 注释）
 //   enabledTools    工具白名单；空表示"用所有已注册"
-//   maxIter         上限 1-50；默认 20
+//   maxIter         上限 1-500；默认 20
 //   temperature     0.0-1.5；默认 0.2
 //   provider        "" / "deepseek" / "copilot"；空 → 用当前激活的
 //   model           "" → provider->defaultModel()

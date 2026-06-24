@@ -167,7 +167,7 @@ void PresetEditorDialog::buildUi()
     modelEdit_->setPlaceholderText(QStringLiteral("留空 = provider 默认模型"));
 
     maxIterSpin_ = new QSpinBox(this);
-    maxIterSpin_->setRange(1, 50);
+    maxIterSpin_->setRange(1, 500);
     maxIterSpin_->setValue(20);
 
     tempSpin_ = new QDoubleSpinBox(this);

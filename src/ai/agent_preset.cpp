@@ -52,7 +52,7 @@ AgentPreset AgentPreset::fromJson(const nlohmann::json& j)
             if (v.is_string()) p.enabledTools.push_back(v.get<std::string>());
         }
     }
-    p.maxIter           = std::clamp(jget<int>(j, "maxIter", 20), 1, 50);
+    p.maxIter           = std::clamp(jget<int>(j, "maxIter", 20), 1, 500);
     p.temperature       = std::clamp(jget<double>(j, "temperature", 0.2), 0.0, 1.5);
     p.provider          = jget<std::string>(j, "provider", "");
     p.model             = jget<std::string>(j, "model", "");

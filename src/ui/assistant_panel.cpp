@@ -1366,7 +1366,7 @@ void AssistantPanel::wireAgentWorker(AgentWorker* w,
         // K-41d: 把 worker 当下的完整 messages snapshot 取走（含 tool/tool_calls 配对）。
         // 必须在主线程槽内同步取——此时 worker 后台线程已先填好 snapshot 再 emit signal
         // (queued connection 的 happens-before 保证可见性)，且 worker 对象尚未 deleteLater。
-        // 取走后用 shared_ptr 包，按钮 lambda 可多次"理论上"重用；实际只点一次。
+        // 取走后用 shared_ptr 包，供不同续跑预算按钮复用；实际通常只点一次。
         auto snap = std::make_shared<std::vector<ChatMessage>>(
             w ? w->takeSnapshotMessages() : std::vector<ChatMessage>{});
         view->appendInlineButton(QStringLiteral("继续推理 +10 轮"),
@@ -1377,6 +1377,15 @@ void AssistantPanel::wireAgentWorker(AgentWorker* w,
                     return;
                 }
                 continueAgentFromSnapshot(presetId, sessionId, *snap, 10);
+            });
+        view->appendInlineButton(QStringLiteral("继续推理 +50 轮"),
+            [this, presetId, sessionId, snap]() {
+                if (!snap || snap->empty()) {
+                    chat_->appendSystemNote(
+                        QStringLiteral("续跑失败：上一轮快照为空（可能已被消耗）。"));
+                    return;
+                }
+                continueAgentFromSnapshot(presetId, sessionId, *snap, 50);
             });
         agentTerminalEventHandled_ = true;  // K-13
         setAgentRunning(false);

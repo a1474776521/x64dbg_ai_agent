@@ -72,7 +72,7 @@ loop:
 
 | 项 | 现状 |
 |---|---|
-| `max_iter` | 默认 20，预设可配 1-50；超限直接 STOP 不再追问 |
+| `max_iter` | 默认 20，预设可配 1-500；超限直接 STOP 不再追问 |
 | Cancel | UI「停止」按钮 → `AgentWorker.requestCancel()` → `ToolContext.cancelFlag` 工具级响应（wait_for_event/step_in/step_over/run_until 都已对接 50ms 切片轮询） |
 | Tool 超时 | 仅调试控制类工具自带超时（默认 30s）；read/static 类无超时（除 SDK 自身阻塞外，没人会 hang 太久） |
 | Provider 超时 | DeepSeek HTTP 客户端层有 connect/read 超时；reasoner 思考过长不会被打断（用户需手动 cancel） |

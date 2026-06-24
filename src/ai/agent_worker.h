@@ -53,7 +53,7 @@ public:
     // 已经把 snapshot 填好，且 panel 在主线程读，由内部 mutex 保护跨线程访问）。
     // 调用后 snapshot 被 move 走，再次调返回空。
     //
-    // 用途：K-41d 续跑按钮（"继续推理 +10 轮"）；其它路径无需关心。
+    // 用途：K-41d 续跑按钮（"继续推理 +10/+50 轮"）；其它路径无需关心。
     std::vector<ChatMessage> takeSnapshotMessages();
 
 signals:

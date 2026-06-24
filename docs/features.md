@@ -458,7 +458,7 @@ ToolPolicy 是「**所有写都需 confirm + audit**」的横切护栏；K-30 �
 - **K-38 UTF-8 截断 bug 修复**：`compressOldestRound` 用 `std::string::substr` 按字节切，命中中文/emoji 多字节序列尾巴时产生残缺字节，被 nlohmann::json dump 抛 `type_error.316: invalid UTF-8 byte 0xE2`，整轮回包丢失。修：新增 `safeUtf8Truncate`（向后退到完整码点边界）+ `sanitizeUtf8`（保留 ASCII + 完整多字节，残缺替换为 U+FFFD）；`run()` 在 `creq.messages` 赋值后再扫一遍兜底
 - **K-39 系统工具（5 个）**：在原 76 个 + Agent 体系外新增 group=`system` 工具组——`fs_read_file`（文本读，utf-8/gbk/auto，默认 256 KB，cap 4 MB）/ `fs_write_file`（覆盖写，默认 overwrite_existing=true）/ `fs_create_file`（仅新建）/ `shell_cmd`（cmd.exe /c，GetACP 解码）/ `shell_pwsh`（pwsh 优先 fallback powershell，注入 UTF-8 输出编码）。安全模型：(a) **路径白名单**`fs_allowed_dirs` 默认 `[{plugin_workdir}, {plugin_temp}, {debuggee_dir}]`，支持 `{plugin_workdir}` / `{plugin_temp}` / `{debuggee_dir}` / `{user_home}` 4 个占位符；拒绝原始 `..`、UNC `\\?\` / `\\.\`、reparse point、保留设备名（NUL/CON/PRN/AUX/COM1-9/LPT1-9），前缀匹配大小写不敏感；(b) Shell 用 CreateProcessW + JobObject `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 防子进程逃跑，stdin 关闭，stdout/stderr 各一条 anonymous pipe 由独立读线程喂；(c) 超时/输出大小全配置化（`shell_timeout_ms_default/cap` 默认 30s / cap 300s；`shell_stdout_max_bytes_default/cap` 256 KB / 4 MB）；(d) 4 写工具加入 `confirmHardEnforced`，**永不**被 auto-approve 豁免；(e) `EventBus::DbgEvent` 新增 `ShellStarted=7 / ShellFinished=8 / ShellTimeout=9` 三事件，payload.raw=完整命令行，payload.addr=pid（cmd_hash 待定）；(f) UTF-8 helper 抽到 `src/util/utf8_safe.h`，K-38 与 K-39 共享
 - **K-40 Copilot 多轮 function calling 解禁**：原 `providerSupportsTools` 一刀切只 DeepSeek 走多轮，Copilot 永远降级单轮（features.md 历史标 "⚠️ 不稳定"）。本批两步打通：(1) `CopilotChatClient::streamChat` 补齐 OpenAI 风格 `tools`/`tool_choice` 请求拼接 + assistant 携带 `tool_calls` 字段 + role=tool 携带 `tool_call_id` + 流式 SSE `tool_calls` 增量按 `index` 分组拼装（id/name/arguments 分片到达）+ 非流式 `tool_calls` 一次性解析 + 防御性"连接断早了"末尾兜底回吐（完全复用 DeepSeek client 30 行模板）；(2) `agent_loop.cpp` 新增 `modelSupportsToolsViaCopilot(model)`，**策略 = 默认放行 + 黑名单**（黑：`o1-mini` / `codex` / `embedding` / `embed` / `davinci` / `babbage` / `curie` / `ada`），未来 Copilot 新增任意模型自动享受；启动日志 `AgentLoop: provider=N model=X useTools=true/false` 可观测。实测 `claude-opus-4.7` 完整跑通 110+ 轮 read_memory/disasm_at agent loop；`claude-3.5/3.7-sonnet` / `gpt-4o` / `gpt-4.1` / `o3-mini` / `o4-mini` / `gemini-*` 全部自动放行，若上游真不支持会返 HTTP 400 错误卡片立即可见（不会沉默吞 tools）
-- 安全上限：`max_iter = 20`（预设可调，1–50）；每工具 64 KB 硬截断；写类工具本批未开放
+- 安全上限：`max_iter = 20`（预设可调，1–500）；每工具 64 KB 硬截断；写类工具本批未开放
 - 全部工具调用进 `plugin.log`
 
 ### Provider 兼容
@@ -517,7 +517,7 @@ ToolPolicy 是「**所有写都需 confirm + audit**」的横切护栏；K-30 �
 | 区域 | 内容 |
 |---|---|
 | 左 | `QTreeView`：group → 预设（4 组：general / exploration / cracking / tracing；S8 新增的两条入 triage 隐式扩展） |
-| 右 | 卡片视图（QFormLayout）：id（只读）/ name / desc / group / tags（多选）/ provider（默认/DeepSeek/Copilot）/ model / maxIter（1–50）/ temperature（0.0–1.5）/ showInContextMenu / systemPrompt（多行）/ userTemplate（多行）/ enabledTools（`QTreeWidget` 工具域分组折叠 + 三态勾选 + 顶部搜索 + Read/Ctrl/Write chip 过滤） |
+| 右 | 卡片视图（QFormLayout）：id（只读）/ name / desc / group / tags（多选）/ provider（默认/DeepSeek/Copilot）/ model / maxIter（1–500）/ temperature（0.0–1.5）/ showInContextMenu / systemPrompt（多行）/ userTemplate（多行）/ enabledTools（`QTreeWidget` 工具域分组折叠 + 三态勾选 + 顶部搜索 + Read/Ctrl/Write chip 过滤） |
 | 底 | 新建（QUuid 短 id）/ 复制副本 / 解锁副本（readonly→可编辑用户预设）/ 删除 / 恢复出厂 / 保存 / 关闭 |
 
 特性：

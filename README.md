@@ -8,9 +8,9 @@
 [![Downloads](https://img.shields.io/github/downloads/a1474776521/x64dbg_ai_agent/total?color=blue)](https://github.com/a1474776521/x64dbg_ai_agent/releases)
 
 为 [x64dbg](https://x64dbg.com) 开发的原生 C++ / Qt 插件，把大语言模型（GitHub Copilot Chat / DeepSeek）直接嵌进调试器，
-辅助逆向工作：反汇编 AI 解读、Agent 自主调试（**81 个工具**，K-43 已加运行态守卫）、多会话持久化、RAG 长期记忆、启发式定位器、调用链追溯（正向 trace + 反向 callstack 采样）、跨版本会话浏览导入。
+辅助逆向工作：反汇编 AI 解读与汇编注释翻译、Agent 自主调试（**81 个工具**，K-43 已加运行态守卫）、多会话持久化、RAG 长期记忆、启发式定位器、调用链追溯（正向 trace + 反向 callstack 采样）、跨版本会话浏览导入。
 
-> 状态：M3.6 跨 DB 会话浏览器 + K-43 Agent 工具运行态守卫已完成。详见 [`docs/features.md`](docs/features.md)、[`docs/development-log.md`](docs/development-log.md)。
+> 当前版本：v0.1.1。更新内容见 [`CHANGELOG.md`](CHANGELOG.md)，功能详情见 [`docs/features.md`](docs/features.md) 与 [`docs/development-log.md`](docs/development-log.md)。
 
 ---
 
@@ -18,9 +18,9 @@
 
 | 类别 | 能力 |
 |---|---|
-| **LLM 接入** | GitHub Copilot Chat（OAuth 设备码登录）+ DeepSeek 官方 API（OpenAI 兼容，含 reasoner）；UI 动态拉取模型列表，不硬编码 |
+| **LLM 接入** | GitHub Copilot Chat（OAuth 设备码登录）+ DeepSeek 官方 API（OpenAI 兼容，含 reasoner）+ 金山云 KSPmas；UI 动态拉取模型列表，不硬编码 |
 | **Agent 自主调试** | 81 个工具：寄存器/内存读写、断点管理、反汇编、调用栈、模块/导入表/导出表、表达式求值、脚本执行、debug 会话控制等；运行态自检（K-42/K-43）防止 LLM 拿 stale 数据乱动 |
-| **反汇编分析** | 反汇编窗口右键 → AI 分析当前地址；自动写入 RAG 向量库 |
+| **反汇编分析** | 反汇编窗口右键 → AI 分析当前地址，或翻译选中汇编并逐条写入行内注释；分析内容自动写入 RAG 向量库 |
 | **多会话持久化** | 按目标 EXE SHA256 一个独立 sqlite 数据库；会话/消息/RAG 块/工具调用记录全部本地保存 |
 | **RAG 长期记忆** | sqlite-vec 0.1.9 + GitHub Models `text-embedding-3-small` (1536-d)；每次提问自动 top-K 拼接相关历史片段 |
 | **启发式定位器** | 6 类扫描：API 引用 / 字符串引用 / x64dbg 风格特征码 / 常量魔数 / 函数原型 / LLM 关键词扩展 |
@@ -94,7 +94,7 @@ pwsh .\scripts\build_all.ps1
 ### 4. 打包 + 部署
 
 ```powershell
-pwsh .\scripts\package_release.ps1 -Version 0.1.0
+pwsh .\scripts\package_release.ps1 -Version 0.1.1
 ```
 
 构建产物：
@@ -113,9 +113,10 @@ cmake --build build-x64 --config Release --target install
 ### 5. 首次使用
 
 1. 启动 x64dbg → `Plugins` 菜单出现 **x64dbg AI**
-2. 打开 AI 助手面板 → 顶部选 Provider（Copilot / DeepSeek）→ 点 **登录** 或 **设置 Key**
+2. 打开 AI 助手面板 → 顶部选 Provider（Copilot / DeepSeek / KSPmas）→ 点 **登录** 或 **设置 Key**
 3. 附加任意目标程序 → 反汇编窗口右键 → **AI 分析当前地址**
 4. 想体验 Agent：直接在聊天框说"分析下当前函数干啥的"或"找下程序里的字符串解密逻辑"
+5. 翻译汇编：在反汇编窗口选中指令 → 右键 **翻译选中汇编并写入注释**
 
 ---
 

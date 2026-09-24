@@ -25,6 +25,7 @@ namespace {
 enum MenuId : int {
     kMenuShowPanel       = 1001,
     kMenuTraceFunction   = 1102,
+    kMenuTranslateSelection = 1103,
 
     // 反汇编右键 "AI ▶" 动态子菜单中的预设项 id 起始
     // 预留 100 个槽位（出厂 5 + 用户自定义留余地）
@@ -113,6 +114,8 @@ void registerMenus(int pluginHandle, int hMenu, int hMenuDisasm)
 
         // 3) 保留原有"AI 追溯此函数调用链"（trace 逻辑独立，不走预设）
         _plugin_menuaddentry(hMenuDisasm, kMenuTraceFunction, "AI 追溯此函数调用链");
+        _plugin_menuaddentry(hMenuDisasm, kMenuTranslateSelection,
+                             "翻译选中汇编并写入注释");
     }
 
     XAI_LOG_INFO("menus registered (hMenu={}, hMenuDisasm={}, hMenuDisasmAi={})",
@@ -153,6 +156,9 @@ void handleMenuEntry(int entryId)
         AssistantPanel::traceFunctionAt(va);
         break;
     }
+    case kMenuTranslateSelection:
+        AssistantPanel::translateSelectedAssembly();
+        break;
     default:
         XAI_LOG_WARN("unknown menu entry: {}", entryId);
         break;

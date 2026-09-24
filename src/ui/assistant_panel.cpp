@@ -20,6 +20,8 @@
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrent>
 
+#include <nlohmann/json.hpp>
+
 #include "ai/agent_loop.h"
 #include "ai/agent_preset.h"
 #include "ai/agent_worker.h"
@@ -35,6 +37,7 @@
 #include "bridgemain.h"
 #include "dbg/event_bus.h"
 #include "debugger/disasm_context.h"
+#include "_scriptapi_comment.h"
 #include "storage/project_context.h"
 #include "storage/session_store.h"
 #include "ui/api_key_dialog.h"
@@ -1049,6 +1052,187 @@ void AssistantPanel::onCancelAgentClicked()
     if (agentWorker_) {
         agentWorker_->requestCancel();
     }
+}
+
+void AssistantPanel::translateSelectedAssembly()
+{
+    // CB_MENUENTRY 可能来自调试线程；只在该线程读取调试器的选区快照，
+    // 随后把 UI 操作转发到 Qt 主线程。
+    DisasmContext context = captureSelectedDisasmContext();
+    QApplication* app = qobject_cast<QApplication*>(QApplication::instance());
+    if (!app) return;
+
+    QMetaObject::invokeMethod(app, [context = std::move(context)]() mutable {
+        auto* panel = showInstance();
+        if (!panel) return;
+        if (!context.debugging) {
+            panel->chat_->appendSystemNote(QStringLiteral("当前未处于调试状态。"));
+            return;
+        }
+        if (context.lines.empty()) {
+            panel->chat_->appendSystemNote(QStringLiteral("请先在反汇编窗口选择要翻译的指令。"));
+            return;
+        }
+
+        IChatProvider* provider = ProviderManager::instance().current();
+        if (!provider) {
+            panel->chat_->appendSystemNote(QStringLiteral("无法获取当前 AI Provider。"));
+            return;
+        }
+        std::string authReason;
+        if (!provider->isAuthenticated(&authReason)) {
+            panel->chat_->appendSystemNote(QStringLiteral("AI Provider 未就绪：%1")
+                                               .arg(QString::fromStdString(authReason)));
+            return;
+        }
+
+        std::string model = panel->modelBox_->currentText().trimmed().toStdString();
+        if (model.empty()) model = provider->defaultModel();
+        if (model.empty()) {
+            panel->chat_->appendSystemNote(QStringLiteral("请先登录并选择一个模型。"));
+            return;
+        }
+
+        nlohmann::json asmLines = nlohmann::json::array();
+        for (const auto& line : context.lines) {
+            char address[24] = {};
+            std::snprintf(address, sizeof(address), "0x%llX",
+                          static_cast<unsigned long long>(line.va));
+            asmLines.push_back({{"address", address}, {"bytes", line.bytesHex},
+                                {"instruction", line.mnemonic}});
+        }
+
+        ChatRequest request;
+        request.model = std::move(model);
+        request.temperature = 0.1;
+        request.stream = false;
+        request.messages.push_back({"system",
+            "你是汇编代码讲解助手。请用简体中文逐条解释给定的 x86/x64 汇编指令，结合相邻指令理解但不要臆测未提供的行为。"
+            "只返回 JSON 数组，不要 Markdown 或额外文字。数组必须与输入一一对应并保持顺序，每项格式为 "
+            "{\"address\":\"原地址\",\"comment\":\"简洁中文释义\"}。每条 comment 尽量简短，适合写入反汇编行内注释。"});
+        request.messages.push_back({"user", asmLines.dump(2)});
+
+        panel->chat_->appendSystemNote(
+            QStringLiteral("正在翻译选中的 %1 条指令…").arg(context.lines.size()));
+        const std::string projectId = ProjectContext::instance().projectId();
+        QPointer<AssistantPanel> guard(panel);
+        QtConcurrent::run([provider, request = std::move(request),
+                           lines = std::move(context.lines), projectId, guard]() mutable {
+            std::string response;
+            std::string error;
+            ChatStreamCallbacks callbacks;
+            callbacks.onDelta = [&response](std::string_view delta) {
+                response.append(delta.data(), delta.size());
+            };
+            callbacks.onError = [&error](std::string value) { error = std::move(value); };
+            provider->streamChat(request, callbacks);
+
+            QMetaObject::invokeMethod(guard, [guard, response = std::move(response),
+                                               error = std::move(error),
+                                               lines = std::move(lines),
+                                               projectId]() mutable {
+                if (!guard) return;
+                if (!error.empty()) {
+                    guard->chat_->appendSystemNote(QStringLiteral("汇编翻译失败：%1")
+                                                       .arg(QString::fromStdString(error)));
+                    return;
+                }
+
+                nlohmann::json translations;
+                try {
+                    const auto begin = response.find('[');
+                    const auto end = response.rfind(']');
+                    if (begin == std::string::npos || end == std::string::npos || end < begin)
+                        throw std::runtime_error("响应中没有 JSON 数组");
+                    translations = nlohmann::json::parse(response.substr(begin, end - begin + 1));
+                } catch (const std::exception& e) {
+                    guard->chat_->appendSystemNote(QStringLiteral("无法解析翻译结果：%1")
+                                                       .arg(QString::fromUtf8(e.what())));
+                    return;
+                }
+
+                if (!translations.is_array() || translations.size() != lines.size()) {
+                    guard->chat_->appendSystemNote(QStringLiteral("翻译结果条数与选中指令不一致，未写入注释。"));
+                    return;
+                }
+
+                if (!DbgIsDebugging() ||
+                    ProjectContext::instance().projectId() != projectId) {
+                    guard->chat_->appendSystemNote(
+                        QStringLiteral("调试目标已变化，未将翻译写入注释。"));
+                    return;
+                }
+                for (const auto& line : lines) {
+                    BASIC_INSTRUCTION_INFO current{};
+                    DbgDisasmFastAt(static_cast<duint>(line.va), &current);
+                    if (current.size != line.size || line.bytesHex.empty()) {
+                        guard->chat_->appendSystemNote(
+                            QStringLiteral("选中指令已变化或无法确认，未写入注释。"));
+                        return;
+                    }
+                    unsigned char raw[16] = {};
+                    if (!DbgMemRead(static_cast<duint>(line.va), raw,
+                                    static_cast<duint>(current.size))) {
+                        guard->chat_->appendSystemNote(
+                            QStringLiteral("无法重新读取选中指令，未写入注释。"));
+                        return;
+                    }
+                    std::string currentBytes;
+                    for (int byte = 0; byte < current.size; ++byte) {
+                        char hex[4] = {};
+                        std::snprintf(hex, sizeof(hex), "%02X", raw[byte]);
+                        if (byte) currentBytes.push_back(' ');
+                        currentBytes.append(hex);
+                    }
+                    if (currentBytes != line.bytesHex) {
+                        guard->chat_->appendSystemNote(
+                            QStringLiteral("选中指令字节已变化，未写入注释。"));
+                        return;
+                    }
+                }
+
+                std::vector<std::string> comments;
+                comments.reserve(lines.size());
+                for (size_t i = 0; i < lines.size(); ++i) {
+                    const auto& item = translations[i];
+                    if (!item.is_object() || !item.contains("address") ||
+                        !item["address"].is_string() || !item.contains("comment") ||
+                        !item["comment"].is_string()) {
+                        guard->chat_->appendSystemNote(QStringLiteral("翻译结果格式不正确，未写入注释。"));
+                        return;
+                    }
+                    char expected[24] = {};
+                    std::snprintf(expected, sizeof(expected), "0x%llX",
+                                  static_cast<unsigned long long>(lines[i].va));
+                    if (item["address"].get<std::string>() != expected) {
+                        guard->chat_->appendSystemNote(QStringLiteral("翻译结果地址顺序不匹配，未写入注释。"));
+                        return;
+                    }
+                    std::string comment = item["comment"].get<std::string>();
+                    if (comment.empty() || comment.size() >= MAX_LABEL_SIZE) {
+                        guard->chat_->appendSystemNote(QStringLiteral("释义为空或超过注释长度限制，未写入注释。"));
+                        return;
+                    }
+                    comments.push_back(std::move(comment));
+                }
+
+                size_t written = 0;
+                for (size_t i = 0; i < lines.size(); ++i) {
+                    if (Script::Comment::Set(static_cast<duint>(lines[i].va),
+                                             comments[i].c_str(), true)) {
+                        ++written;
+                    }
+                }
+                guard->chat_->appendSystemNote(
+                    written == lines.size()
+                        ? QStringLiteral("已完成翻译，并为 %1 条指令写入注释。")
+                              .arg(static_cast<qulonglong>(written))
+                        : QStringLiteral("翻译完成：%1/%2 条指令写入注释成功。")
+                              .arg(static_cast<qulonglong>(written))
+                              .arg(static_cast<qulonglong>(lines.size())));
+            }, Qt::QueuedConnection);
+        });
+    }, Qt::QueuedConnection);
 }
 
 void AssistantPanel::runAgentWithPreset(const std::string& presetId,

@@ -6,11 +6,14 @@
 # 用法：
 #   pwsh scripts\package_release.ps1
 #   pwsh scripts\package_release.ps1 -Config Debug
+#   pwsh scripts\package_release.ps1 -Version 0.1.1
 
 [CmdletBinding()]
 param(
     [ValidateSet('Release', 'Debug', 'RelWithDebInfo')]
     [string] $Config = 'Release',
+
+    [string] $Version = '',
 
     [string] $OutputDir = 'release'
 )
@@ -46,11 +49,22 @@ function Copy-Artifact {
     Write-Host "[package] $Arch -> $dstDir" -ForegroundColor Green
 }
 
+$x86Artifact = Join-Path $repoRoot "build-x86/bin/$Config/x64dbg_ai_plugin.dp32"
+$x64Artifact = Join-Path $repoRoot "build-x64/bin/$Config/x64dbg_ai_plugin.dp64"
+if (-not (Test-Path -LiteralPath $x86Artifact) -or -not (Test-Path -LiteralPath $x64Artifact)) {
+    throw "缺少双架构构建产物，请先构建 x86 与 x64：$x86Artifact / $x64Artifact"
+}
+
 Copy-Artifact -Arch x86
 Copy-Artifact -Arch x64
 
-# 生成 zip
-$zipPath = Join-Path $repoRoot "x64dbg-ai-plugin-$Config.zip"
+# 生成 zip；发布时传入版本号，生成可直接上传到 GitHub Release 的版本化资产。
+$archiveName = if ([string]::IsNullOrWhiteSpace($Version)) {
+    "x64dbg-ai-plugin-$Config.zip"
+} else {
+    "x64dbg-ai-plugin-v$Version.zip"
+}
+$zipPath = Join-Path $repoRoot $archiveName
 if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
 Compress-Archive -Path (Join-Path $outRoot '*') -DestinationPath $zipPath
 Write-Host "[package] zip: $zipPath" -ForegroundColor Cyan

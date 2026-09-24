@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <limits>
 
 #include <Windows.h>
 
@@ -27,6 +28,42 @@ std::string toHexBytes(const unsigned char* p, int n)
     return s;
 }
 
+void captureInstructionRange(DisasmContext& ctx, uint64_t start,
+                             uint64_t selectionEnd, uint64_t scanEnd, int maxLines)
+{
+    ctx.selectionStart = start;
+    ctx.selectionEnd = selectionEnd;
+    ctx.contextStart = start;
+
+    duint cur = static_cast<duint>(start);
+    for (int i = 0; i < maxLines && static_cast<uint64_t>(cur) <= scanEnd; ++i) {
+        BASIC_INSTRUCTION_INFO info{};
+        DbgDisasmFastAt(cur, &info);
+        if (info.size <= 0 || info.size > 16) {
+            XAI_LOG_WARN("DbgDisasmFastAt at 0x{:x} returned invalid size {}",
+                         static_cast<uint64_t>(cur), info.size);
+            break;
+        }
+
+        DisasmLine line;
+        line.va = static_cast<uint64_t>(cur);
+        line.size = info.size;
+        line.mnemonic = info.instruction;
+
+        unsigned char raw[16] = {0};
+        if (DbgMemRead(cur, raw, static_cast<duint>(info.size))) {
+            line.bytesHex = toHexBytes(raw, info.size);
+        }
+
+        ctx.lines.push_back(std::move(line));
+        ctx.contextEnd = static_cast<uint64_t>(cur) + static_cast<uint64_t>(info.size);
+        cur += info.size;
+    }
+    if (!ctx.lines.empty() && static_cast<uint64_t>(cur) <= scanEnd) {
+        XAI_LOG_WARN("disassembly selection truncated at {} instructions", maxLines);
+    }
+}
+
 }  // namespace
 
 DisasmContext captureCurrentDisasmContext(int maxLines)
@@ -43,34 +80,29 @@ DisasmContext captureCurrentDisasmContext(int maxLines)
         XAI_LOG_WARN("GuiSelectionGet(GUI_DISASSEMBLY) failed");
         return ctx;
     }
-    ctx.selectionStart = sel.start;
-    ctx.selectionEnd   = sel.end;
-    ctx.contextStart   = sel.start;
+    captureInstructionRange(ctx, static_cast<uint64_t>(sel.start),
+                            static_cast<uint64_t>(sel.end),
+                            std::numeric_limits<uint64_t>::max(), maxLines);
+    return ctx;
+}
 
-    duint cur = sel.start;
-    for (int i = 0; i < maxLines; ++i) {
-        BASIC_INSTRUCTION_INFO info{};
-        DbgDisasmFastAt(cur, &info);
-        if (info.size <= 0 || info.size > 16) {
-            XAI_LOG_WARN("DbgDisasmFastAt at 0x{:x} returned invalid size {}",
-                         static_cast<uint64_t>(cur), info.size);
-            break;
-        }
+DisasmContext captureSelectedDisasmContext(int maxLines)
+{
+    DisasmContext ctx;
+    ctx.debugging = DbgIsDebugging();
+    if (!ctx.debugging) return ctx;
 
-        DisasmLine line;
-        line.va       = static_cast<uint64_t>(cur);
-        line.size     = info.size;
-        line.mnemonic = info.instruction;
-
-        unsigned char raw[16] = {0};
-        if (DbgMemRead(cur, raw, static_cast<duint>(info.size))) {
-            line.bytesHex = toHexBytes(raw, info.size);
-        }
-
-        ctx.lines.push_back(std::move(line));
-        ctx.contextEnd = static_cast<uint64_t>(cur) + static_cast<uint64_t>(info.size);
-        cur += info.size;
+    SELECTIONDATA sel{};
+    if (!GuiSelectionGet(GUI_DISASSEMBLY, &sel)) {
+        XAI_LOG_WARN("GuiSelectionGet(GUI_DISASSEMBLY) failed");
+        return ctx;
     }
+
+    const uint64_t start = static_cast<uint64_t>(sel.start);
+    const uint64_t end = static_cast<uint64_t>(sel.end);
+    if (end < start || maxLines <= 0) return ctx;
+
+    captureInstructionRange(ctx, start, end, end, maxLines);
     return ctx;
 }
 

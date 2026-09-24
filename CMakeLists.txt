@@ -8,7 +8,7 @@ if(NOT CMAKE_TOOLCHAIN_FILE AND DEFINED ENV{VCPKG_ROOT})
 endif()
 
 project(x64dbg-ai-plugin
-    VERSION 0.1.0
+    VERSION 0.1.1
     DESCRIPTION "AI assistant plugin for x64dbg"
     LANGUAGES C CXX
 )

@@ -41,6 +41,9 @@ public:
     // 内部会确保面板已显示，并打开 TraceDialog 自动解析为函数。
     static void traceFunctionAt(uint64_t va);
 
+    // 反汇编右键 → 翻译当前选区并将逐条释义写入行内注释。
+    static void translateSelectedAssembly();
+
     // 外部模块（如 TraceDialog）发起一次提问；自动显示并提交到当前会话。
     //   userVisible: 显示在对话区的标题/摘要
     //   userPrompt:  实际发给模型的内容（会经 RAG 增强）

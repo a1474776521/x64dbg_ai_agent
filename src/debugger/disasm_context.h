@@ -30,6 +30,9 @@ struct DisasmContext {
 // 若未在调试中，返回 debugging=false，其它字段空。
 DisasmContext captureCurrentDisasmContext(int maxLines = 32);
 
+// 仅抓取当前选区范围内的指令；maxLines 用于限制过大的选择范围。
+DisasmContext captureSelectedDisasmContext(int maxLines = 128);
+
 // 把 DisasmContext 渲染为发送给 LLM 的 markdown 文本。
 std::string renderDisasmContextMarkdown(const DisasmContext& ctx);
 
